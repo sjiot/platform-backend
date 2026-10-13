@@ -34,21 +34,12 @@ class HomeScreen extends StatefulWidget {
   // 펄스(깜빡임)를 멈춘 뒤 안내 문구를 띄웁니다. (main.dart가 GET
   // /queue/status 의 full 값을 1초마다 조회해서 내려줍니다)
   final bool queueFull;
-  // [신규] 영수증 용지가 떨어졌는지. true면 대기열이 가득 찼을 때와 똑같은
-  // 방식으로 시작하기 버튼을 흐리게 만들고 안내 문구를 띄웁니다.
-  // (main.dart가 Windows 프린터 드라이버 상태를 2초마다 조회해서 내려줍니다)
-  // queueFull과 동시에 true가 될 수도 있는데, 그 경우 대기열 안내를 먼저
-  // 보여줍니다(대기열은 대부분 곧 풀리지만, 용지 부족은 스태프가 직접
-  // 처리해줘야 해서 더 무거운 상태이긴 하나, 화면에 문구가 계속 바뀌는 것보다
-  // 하나로 고정해서 보여주는 쪽이 손님 입장에서 덜 헷갈리기 때문입니다).
-  final bool paperOut;
 
   const HomeScreen({
     super.key,
     this.onEnter,
     this.enabled = true,
     this.queueFull = false,
-    this.paperOut = false,
   });
 
   @override
@@ -211,20 +202,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    // [수정] 대기열이 가득 찬 동안에는 펄스를 멈추고 버튼을 흐리게 만든 뒤
+    // 대기열이 가득 찬 동안에는 펄스를 멈추고 버튼을 흐리게 만든 뒤
     // 아래에 안내 문구를 붙입니다(탭/Enter는 main.dart에서 이미 막혀 있습니다).
-    // [신규] 영수증 용지가 떨어진 경우도 같은 방식으로 안내합니다. 두 상태가
-    // 동시에 true면 대기열 안내를 우선 보여줍니다.
     final Widget enterArea;
     if (widget.queueFull) {
       enterArea = _blockedNotice(
         title: '지금은 대기열이 가득 찼습니다',
         body: '앞 손님 제작이 끝나면 자동으로 다시 시작할 수 있습니다',
-      );
-    } else if (widget.paperOut) {
-      enterArea = _blockedNotice(
-        title: '영수증 용지가 부족합니다',
-        body: '스태프에게 문의해주세요. 용지를 채우면 자동으로 다시 시작할 수 있습니다',
       );
     } else {
       enterArea = AnimatedBuilder(

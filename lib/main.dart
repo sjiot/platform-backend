@@ -19,9 +19,6 @@ import 'services/kiosk_window_web.dart'
     if (dart.library.io) 'services/kiosk_window_io.dart';
 
 import 'services/receipt_printer_service.dart';
-// [신규] 영수증 용지 부족 확인(Windows 드라이버 상태 조회). printer_status_io.dart
-// 안에서 또 한 번 조건부 임포트로 분기하므로 여기서는 그냥 일반 임포트입니다.
-import 'services/printer_status_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/mbti_choice_screen.dart';
 import 'screens/mbti_quiz_screen.dart';
@@ -348,19 +345,6 @@ class _AppRootState extends State<AppRoot> {
   //   false — 여유 있음. 평소대로 동작.
   bool? _queueFull;
 
-  // ---------------- 영수증 용지 상태 ----------------
-  // [신규] 대기열 현황과 똑같은 방식으로, 시작 화면에 머무는 동안 영수증
-  // 프린터의 Windows 드라이버 상태를 계속 조회해서 용지가 떨어진 상태면
-  // 주문을 "시작조차" 못 하게 막습니다(대기열 가득 참과 동일한 처리 방식).
-  static const Duration _paperPollInterval = Duration(seconds: 2);
-  Timer? _paperPollTimer;
-  bool _paperPollInFlight = false;
-  // null  — 아직 모름(프린터를 못 찾음/드라이버가 상태를 안 알려줌 포함).
-  //         판단 보류 = 시작 허용.
-  // true  — 용지 없음으로 확인됨. 시작하기를 막고 안내 문구를 띄웁니다.
-  // false — 용지 있음. 평소대로 동작.
-  bool? _printerPaperOut;
-
   // ---------------- 영수증 화면 표시용 값 ----------------
   String? _receiptOrderNumber;
   String? _receiptTime;
@@ -423,8 +407,6 @@ class _AppRootState extends State<AppRoot> {
     );
     // [신규] 시작 화면 대기열 현황 폴링 시작(앱이 살아있는 동안 계속 돕니다).
     _startQueuePolling();
-    // [신규] 시작 화면 영수증 용지 상태 폴링 시작.
-    _startPaperPolling();
   }
 
   void _resetLetters() {
@@ -471,92 +453,6 @@ class _AppRootState extends State<AppRoot> {
         }
       } finally {
         _queuePollInFlight = false;
-      }
-    });
-  }
-
-  //------------ 영수증 용지 상태 폴링 -------------
-  // 대기열 폴링과 똑같은 원리입니다: 타이머는 앱이 사는 동안 계속 돌리되,
-  // 실제 조회는 시작 화면일 때만 합니다.
-  //
-  // [수정] 용지 상태를 두 군데에서 같이 확인합니다.
-  //   1. 이 PC에 꽂힌 프린터의 Windows 드라이버 상태(기존 방식) — 네트워크와
-  //      무관하고, 실제 기기에서 아직 검증 전입니다(드라이버가 용지부족
-  //      비트를 실제로 채워주는지 모름).
-  //   2. 팀장님이 새로 추가하신 백엔드 "남은 용지 수" API(GET /admin/paper,
-  //      {"remaining": 정수}) — 서버가 세고 있는 남은 매수가 0 이하면
-  //      용지부족으로 봅니다. 관리자 페이지에서 /admin/paper/refill로
-  //      수량을 바꿔보면 실제로 용지를 뽑지 않고도 이 기능을 테스트할 수
-  //      있습니다.
-  // 둘 중 하나라도 "없음"으로 확인되면 용지부족으로 판단합니다(OR). 둘 다
-  // 모르면(조회 실패 등) 직전 값을 그대로 둬서, 일시적인 조회 실패로 주문을
-  // 막아버리는 일이 없게 합니다.
-  //
-  // 조회 자체가 가벼운 편은 아니라서 주기를 대기열(1초)보다 살짝 길게(2초)
-  // 뒀습니다.
-  void _startPaperPolling() {
-    _paperPollTimer?.cancel();
-    _paperPollTimer = Timer.periodic(_paperPollInterval, (_) async {
-      if (!mounted) return;
-      // 대기열 폴링과 동일하게, 시작 화면에 있을 때만 확인합니다.
-      if (_step != AppStep.home) return;
-      if (_paperPollInFlight) return;
-
-      _paperPollInFlight = true;
-      try {
-        // 1. 이 PC에 꽂힌 프린터의 Windows 드라이버 상태.
-        bool? localPaperOut;
-        try {
-          // 프린터 자체를 못 찾으면(이름이 다르거나 아직 설치 전 등) 판단을
-          // 보류합니다 — 그렇다고 주문을 막아버리면 안 되기 때문입니다.
-          final printer = await ReceiptPrinterService.findTargetPrinter();
-          if (printer != null) {
-            final status = PrinterStatusService.checkPaperStatus(printer.name);
-            switch (status) {
-              case PaperStatus.paperOut:
-                localPaperOut = true;
-                break;
-              case PaperStatus.ok:
-                localPaperOut = false;
-                break;
-              case PaperStatus.unknown:
-                localPaperOut = null;
-                break;
-            }
-          }
-        } catch (_) {
-          // 드라이버 조회 중 예외 — 이 신호만 모름으로 둡니다.
-        }
-
-        // 2. 백엔드가 세고 있는 남은 용지 수.
-        bool? remotePaperOut;
-        if (kApiEnabled) {
-          final remaining = await _api.getRemainingPaper();
-          if (remaining != null) {
-            remotePaperOut = remaining <= 0;
-          }
-        }
-
-        if (!mounted) return;
-
-        // 둘 중 하나라도 "없음"이면 용지부족, 하나라도 "있음"이고 나머지가
-        // 모름이면 "있음", 둘 다 모르면 판단 보류(직전 값 유지).
-        bool? combined;
-        if (localPaperOut == true || remotePaperOut == true) {
-          combined = true;
-        } else if (localPaperOut == false || remotePaperOut == false) {
-          combined = false;
-        } else {
-          combined = null;
-        }
-
-        if (combined != null && combined != _printerPaperOut) {
-          setState(() => _printerPaperOut = combined);
-        }
-      } catch (_) {
-        // 조회 중 예외 — 판단 보류(직전 값 유지), 주문은 막지 않습니다.
-      } finally {
-        _paperPollInFlight = false;
       }
     });
   }
@@ -906,12 +802,8 @@ class _AppRootState extends State<AppRoot> {
       //   }
       //   break;
       case AppStep.home:
-        // [수정] 대기열이 가득 찼거나 영수증 용지가 없는 동안에는 Enter도
-        // 무시합니다.
-        if (isEnter &&
-            !_stockLoading &&
-            _queueFull != true &&
-            _printerPaperOut != true) {
+        // 대기열이 가득 찬 동안에는 Enter도 무시합니다.
+        if (isEnter && !_stockLoading && _queueFull != true) {
           _startOrder();
         }
         break;
@@ -1819,7 +1711,6 @@ class _AppRootState extends State<AppRoot> {
     _doneRestartTimer?.cancel();
     _exitDialogTimeoutTimer?.cancel();
     _queuePollTimer?.cancel();
-    _paperPollTimer?.cancel();
     _focusNode.dispose();
     super.dispose();
   }
@@ -1831,17 +1722,9 @@ class _AppRootState extends State<AppRoot> {
       case AppStep.home:
         screen = HomeScreen(
           onEnter: () => _startOrder(),
-          // [수정] 재고 조회 중이거나 대기열이 가득 찼거나 영수증 용지가
-          // 없는 동안에는 탭도 막습니다.
-          enabled: !_stockLoading &&
-              _queueFull != true &&
-              _printerPaperOut != true,
+          // 재고 조회 중이거나 대기열이 가득 찬 동안에는 탭도 막습니다.
+          enabled: !_stockLoading && _queueFull != true,
           queueFull: _queueFull == true,
-          // [수정] home_screen.dart에 paperOut을 추가해서, 이제는 대기열
-          // 가득 참과 똑같은 방식으로 화면 안에서 직접 안내합니다. (기존에는
-          // home_screen.dart가 없어서 화면 위에 덧그리는 badge였습니다 —
-          // 이제 파일을 받아서 제대로 통합했습니다)
-          paperOut: _printerPaperOut == true,
         );
         break;
 
