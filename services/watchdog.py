@@ -8,18 +8,18 @@ from config import (DEADLINE_KEY, DISCARD_TIMEOUT_SEC, STAGE_BUSY,
 
 # 명세 7장. 사람·이동이 끼는 셋은 기계 속도로 재면 안 된다.
 STAGE_TIMEOUT = {
-    "assigned": 60,
-    "keycap_mismatched": 60,
-    "keycap_dispensed": 60,
-    "keycap_reached": 60,
-    "keycap_packed": 60,
+    "assigned": 120,
+    "keycap_mismatched": 120,
+    "keycap_dispensed": 120,
+    "keycap_reached": 120,
+    "keycap_packed": 120,
     "tray_reached": 120, # AGV 폐기 후 위치 이동 문제. 직접 확인 후 유동적으로 처리하도록 변경 필요
-    "board_mismatched": 60,
-    "board_packed": 60,
+    "board_mismatched": 120,
+    "board_packed": 120,
     "pickup_reached": 300,  # AGV 픽업. 앞 주문이 노쇼(3분)면 그만큼 AGV가 묶이므로 그 위로 잡는다
     "loaded": 120,      # AGV 이동 거리에 좌우됨
     "arrived": 300,     # 프론트가 3분에 /unclaim을 친다. 이건 그게 실패했을 때의 백업
-    "verified": 60,
+    "verified": 120,
     "received": 500,    # 사용자 조립 시간 → 초과 시 completed 일괄
 }
 

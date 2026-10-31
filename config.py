@@ -60,7 +60,7 @@ ARCHIVE_TTL = int(os.getenv("ARCHIVE_TTL", str(90 * 24 * 3600)))
 
 # 대시보드
 EXHIBITION_START_DATE = os.getenv("EXHIBITION_START_DATE","20260918")
-EXHIBITION_DAYS = int(os.getenv("EXHIBITION_DAYS", "3"))
+EXHIBITION_DAYS = int(os.getenv("EXHIBITION_DAYS", "300"))
 
 ORDER_PAGE_BASE = os.getenv("ORDER_PAGE_BASE", "https://sjiot-backend-294910862364.asia-northeast1.run.app")
 

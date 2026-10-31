@@ -367,3 +367,71 @@ def get_station_status(station_id):
         body["elapsed_sec"] = int(elapsed)
         body["unclaim_remain_sec"] = max(0, math.ceil(STATION_UNCLAIM_MIN_SEC - elapsed))
     return jsonify(body), 200
+
+@bp.route('/station/<station_id>/status/debug', methods=['GET'])
+def get_station_statu_debug(station_id):
+    """
+    조립대 배정 주문 조회 (AGV 도착 알림 후 디스플레이가 주문번호 띄울 때 사용)
+    ---
+    tags:
+      - Station
+    parameters:
+      - in: path
+        name: station_id
+        type: string
+        required: true
+        example: 1
+    responses:
+      200:
+        description: 조회 성공
+        schema:
+          type: object
+          properties:
+            order_id:
+              type: string
+              example: ord_a1b2c3d4
+            order_seq:
+              type: integer
+              example: 12
+      400:
+        description: 이 조립대에 배정된 주문이 없음
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: 이 조립대에 배정된 주문이 없습니다
+    """
+    station_id = str(station_id)
+    order_id = r.get(f"{STATION_ORDER_PREFIX}{station_id}")
+    if not order_id:
+        return jsonify({'ready': False, 'error': '이 조립대에 배정된 주문이 없습니다'}), 400
+
+    order_data = r.hgetall(f"order:{order_id}")
+    if not order_data:
+        # station_order 키는 남아있는데 order 해시가 TTL로 만료된 엣지 케이스
+        return jsonify({'ready': False, 'error': '이 조립대에 배정된 주문이 없습니다'}), 400
+
+    # 배정만 됐을 뿐 부품은 아직 창고·벨트·AGV 위에 있다. 이 구간에 주문번호를 내주면
+    # 디스플레이가 AGV보다 먼저 주문을 띄우고 사용자가 빈 조립대 앞에서 QR을 찍는다.
+    # 400을 쓰는 건 프론트가 이 엔드포인트의 400을 이미 "아직 없음"으로 처리하기 때문.
+    stage = order_data.get("stage")
+
+    elapsed = _elapsed_since_arrival(order_data)
+    body = {
+        "ready": True,
+        "order_id": order_id,
+        "order_seq": order_data.get("order_seq"),
+        "stage": stage,
+        "board": order_data.get("board"),
+        "keycap": order_data.get("keycap"),
+        "colors": [c for c in (order_data.get("colors") or "").split(",") if c],
+        "arrived_at": order_data.get("arrived_at"),
+        "fault": order_data.get("fault") or None,
+        "fault_section": order_data.get("fault_section") or None,
+    }
+    if elapsed is not None:
+        # 프론트가 자체 타이머 대신 이 값을 써도 되도록 서버 기준 잔여 시간을 같이 준다.
+        body["elapsed_sec"] = int(elapsed)
+        body["unclaim_remain_sec"] = max(0, math.ceil(STATION_UNCLAIM_MIN_SEC - elapsed))
+    return jsonify(body), 200
