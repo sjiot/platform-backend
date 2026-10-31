@@ -1541,7 +1541,11 @@ const POLL = {
 // =========================================================
 // AGV 실제 이동 — GET /dashboard/mark/movement
 //
-// 받은 점을 큐에 쌓고, 일정 속도로 하나씩 따라간다 (밀리면 빨라짐).
+// 화면의 AGV 는 실제 좌표를 그대로 따라가지 않는다.
+// 구간마다 화면의 고정 경로(통로)를 정하고, 실제 좌표로 구한 진행률만큼 그 위를 간다.
+//   진행률 = 1 − (지금 → 목적지 남은 거리) / (출발지 → 목적지 거리)   ← 실제 좌표 기준
+//   목적지 = leg 값에 있으면 그것, 없으면 주문 단계(agvTask)로 추정
+//   목적지 실제 좌표를 모르면 시간(AGV_SPEED)으로 추정하고 도착점을 받으면 마무리
 // 이 API 에 연결되지 않으면 예전 방식(주문 단계로 위치 추정)으로 동작한다.
 // =========================================================
 
@@ -1549,17 +1553,9 @@ const AGV_MOVE = {
   path: '/dashboard/mark/movement',
 
   tickMs: 100,             // 화면 갱신 간격
-  cellSec: 2.0,            // 기본 속도 — 한 칸 이동 시간(초). 실제 AGV 좌표 보고 간격(2초)과 같게
-  // 남은 점 수에 따른 속도 — 다음 좌표가 오기 전에 마지막 점에 먼저 닿아 서지 않게
-  //   1개 남음 → slowFactor 배 (천천히 가며 다음 좌표를 기다림)
-  //   2개 남음 → 1배
-  //   3개 이상 → 1개당 +boostPerPoint 배 (따라잡기, 최대 maxBoost)
-  //   마지막 점이 도착점(checkpoint)이면 늦추지 않는다 — 어차피 거기서 선다
-  slowFactor: 0.75,
-  boostPerPoint: 0.5,
-  maxBoost: 3,             // 따라잡기 최대 배속
-  speedEase: 0.2,          // 배속이 바뀔 때 한 틱에 따라가는 비율 (급가속·급감속 방지)
-  teleportPoints: 8,       // 밀린 점이 이만큼 쌓이면 마지막 점으로 바로 이동
+  followSec: 1.6,          // 진행률이 바뀌면 이 시간 안에 따라간다 (실제 보고 간격 2초보다 조금 짧게)
+  minSpeed: 30,            // 따라갈 때 최저 속도 px/s (끝에서 너무 느려지지 않게)
+  maxProgress: 0.97,       // 도착점을 받기 전에는 여기까지만 간다
 
   pollMoving: 1200,        // 이동 중 폴링 — 보고 간격(2초)보다 짧게 두어 새 점을 빨리 받는다
   pollIdle: 4000,          // 정차 중 · 위치 모름
@@ -1571,12 +1567,49 @@ const AGV_MOVE = {
 
 
 // ---------------------------------------------------------
+// 도착점(checkpoint)의 실제 좌표 [c, r]
+//
+// 진행률 계산에 쓴다. 비워 두면 도착점에 붙어 온 coord 로 저절로 채워지고
+// (브라우저에 저장), 여기 적은 값이 있으면 그 값이 우선한다.
+// ---------------------------------------------------------
+
+const AGV_CHECKPOINT_COORD = {
+  // 'parking':   [0, 0],
+  // 'station:1': [1, 4],
+  // 'station:2': [3, 4],
+  // 'station:3': [5, 4],
+  // 'discard':   [0, 4]
+};
+
+const CP_STORE_KEY = 'agv:checkpointCoord';
+
+function loadCpCoord() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(CP_STORE_KEY) || '{}') || {}; } catch (e) { }
+  return { ...saved, ...AGV_CHECKPOINT_COORD };
+}
+
+function saveCpCoord(map) {
+  try { localStorage.setItem(CP_STORE_KEY, JSON.stringify(map)); } catch (e) { }
+}
+
+// 실제 좌표 사이 거리 — 격자 이동이라 맨해튼 거리
+function coordDist(a, b) {
+  return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
+}
+
+// leg 값에 목적지가 들어 있으면 꺼낸다 (예: 'parking→station:2' → 'station:2')
+function legDest(leg) {
+  const hits = String(leg ?? '').match(/parking|discard|station:\d+/g);
+  return hits ? hits[hits.length - 1] : null;
+}
+
+
+// ---------------------------------------------------------
 // 좌표 [c, r] → 화면 위치 (메인 비주얼 안쪽 1088 × 638 px)
 //
-// ※ 임시값 — 실제 격자 크기·방향을 받으면 이 값만 고치면 된다.
-//   swap: true 면 coord 를 [r, c] 로 본다.
-//   checkpoint 가 붙은 점(대기장소·조립대·폐기)은 이 값과 상관없이
-//   화면의 해당 위치에 정확히 놓인다.
+// ※ 지금은 AGV 위치를 고정 경로 + 진행률로 그리므로 화면 위치에 직접 쓰지 않는다.
+//   (구간 정보가 없을 때의 참고용 — swap: true 면 coord 를 [r, c] 로 본다.)
 // ---------------------------------------------------------
 
 const AGV_GRID = {
@@ -1587,7 +1620,6 @@ const AGV_GRID = {
   swap: false
 };
 
-const AGV_CELL_PX = (AGV_GRID.dx + AGV_GRID.dy) / 2;
 
 function coordToPx(coord) {
   if (!Array.isArray(coord) || coord.length < 2) return null;
@@ -1598,16 +1630,40 @@ function coordToPx(coord) {
 // API 의 점 → 화면 점
 function movePoint(p) {
   if (!p) return null;
-  const at = p.checkpoint ? placePoint(p.checkpoint) : coordToPx(p.coord);
-  if (!at) return null;
+  const coord = Array.isArray(p.coord) && p.coord.length >= 2
+    ? (AGV_GRID.swap ? [Number(p.coord[1]), Number(p.coord[0])] : [Number(p.coord[0]), Number(p.coord[1])])
+    : null;
+  if (!coord && !p.checkpoint) return null;
   return {
-    x: at.x,
-    y: at.y,
+    coord,
     seq: Number(p.seq),
     leg: p.leg,
     checkpoint: p.checkpoint || null
   };
 }
+
+
+// 실제 이동 상태 (state.mv) 초기값
+//   mode: 'init'(확인 중) | 'api'(실제 좌표) | 'legacy'(추정)
+const MV_RESET = {
+  mode: 'init',
+  visible: false,
+  x: MV.PARK.x,            // 화면 위치
+  y: MV.PARK.y,
+  lastSeq: null,
+  leg: undefined,          // 지금 구간 id (undefined = 아직 모름)
+  from: null,              // 출발 checkpoint
+  dest: null,              // 목적지 checkpoint
+  startCoord: null,        // 출발 실제 좌표
+  lastCoord: null,         // 마지막으로 받은 실제 좌표
+  route: null,             // 화면 고정 경로 { pts, len }
+  target: 0,               // 경로 위 가야 할 거리(px)
+  shown: 0,                // 경로 위 지금 그린 거리(px)
+  legAt: 0,                // 구간 시작 시각 (목적지 좌표를 모를 때 시간으로 추정)
+  stopped: false,
+  place: null,             // 정차한 checkpoint
+  lastPointAt: 0           // 새 점을 마지막으로 받은 시각
+};
 
 
 // =========================================================
@@ -1768,19 +1824,7 @@ class Component extends DCLogic {
     //   mode: 'init'(확인 중) | 'api'(실제 좌표) | 'legacy'(추정)
     // -----------------------------------------------------
 
-    mv: {
-      mode: 'init',
-      visible: false,
-      x: MV.PARK.x,
-      y: MV.PARK.y,
-      queue: [],           // 아직 안 간 점
-      trail: [],           // 이번 구간에서 지나온 점
-      lastSeq: null,
-      leg: null,
-      stopped: false,
-      place: null,         // 정차한 checkpoint
-      lastPointAt: 0       // 새 점을 마지막으로 받은 시각
-    }
+    mv: MV_RESET
 
   };
 
@@ -2276,7 +2320,8 @@ class Component extends DCLogic {
 
     this.mvFails = 0;
     this.mvEverOk = false;
-    this.setState(s => ({ mv: { ...s.mv, mode: 'init', visible: false, queue: [], trail: [], lastSeq: null, leg: null, stopped: false, place: null } }));
+    this.cpCoord = loadCpCoord();
+    this.setState({ mv: MV_RESET });
     this.mvTimer = setInterval(() => this.mvTick(), AGV_MOVE.tickMs);
     this.onVisibility = () => {
       if (document.hidden) {
@@ -2388,158 +2433,200 @@ class Component extends DCLogic {
 
   // 응답 반영 — 프론트 규칙
   //   current == null       → 위치 모름, 마커 숨김
-  //   처음 · resync · full  → current 위치로 바로, 경로는 points 로 다시
-  //   그 외                 → seq 가 새로운 점만 큐에 추가
+  //   처음 · resync · full  → 이번 구간 점들로 상태를 다시 만들고 그 자리로 바로
+  //   그 외                 → seq 가 새로운 점만 차례로 반영
   mvApply(data, full) {
+
+    const current = movePoint(data.current);
+    const points = (Array.isArray(data.points) ? data.points : [])
+      .map(movePoint)
+      .filter(Boolean)
+      .sort((a, b) => a.seq - b.seq);
+
+    // 도착점 실제 좌표 기억 (설정값이 있으면 그것 우선)
+    let learned = false;
+    [...points, current].forEach(p => {
+      if (!p || !p.checkpoint || !p.coord || p.checkpoint in AGV_CHECKPOINT_COORD) return;
+      const old = this.cpCoord[p.checkpoint];
+      if (old && old[0] === p.coord[0] && old[1] === p.coord[1]) return;
+      this.cpCoord[p.checkpoint] = p.coord;
+      learned = true;
+    });
+    if (learned) {
+      dbg('agv', '도착점 좌표', this.cpCoord);
+      saveCpCoord(this.cpCoord);
+    }
 
     this.setState(s => {
 
-      const m = s.mv;
-      const current = movePoint(data.current);
-      const points = (Array.isArray(data.points) ? data.points : [])
-        .map(movePoint)
-        .filter(Boolean)
-        .sort((a, b) => a.seq - b.seq);
-
-      const maxSeq = points.reduce((v, p) => Math.max(v, p.seq), m.lastSeq ?? -1);
+      const m0 = s.mv;
+      const maxSeq = points.reduce((v, p) => Math.max(v, p.seq), m0.lastSeq ?? -1);
 
       if (!current) {
         dbgChanged('agv:movement', 'current = null → 위치 모름');
         return {
-          mv: { ...m, mode: 'api', visible: false, queue: [], trail: [], stopped: false, place: null, lastSeq: maxSeq >= 0 ? maxSeq : m.lastSeq }
+          mv: { ...MV_RESET, mode: 'api', lastSeq: maxSeq >= 0 ? maxSeq : m0.lastSeq }
         };
       }
 
-      if (full || data.resync || m.lastSeq === null || !m.visible) {
-        // agv:trail 맨 앞에는 직전 구간의 도착점(출발점)이 남아 있을 수 있다 → 함께 그린다
+      if (full || data.resync || m0.lastSeq === null || !m0.visible) {
+        // agv:trail 맨 앞에는 직전 구간의 도착점(출발점)이 남아 있을 수 있다 → 출발지로 쓴다
         const legPts = points.filter((p, i) =>
-          p.seq <= current.seq && (p.leg === current.leg || (i === 0 && points.length > 1)));
-        dbg('agv', 'resync', { seq: current.seq, leg: current.leg, points: legPts.length });
-        return {
-          mv: {
-            ...m,
-            mode: 'api',
-            visible: true,
-            x: current.x,
-            y: current.y,
-            queue: [],
-            trail: legPts.length ? legPts : [current],
-            leg: current.leg,
-            stopped: !!current.checkpoint,
-            place: current.checkpoint,
-            lastSeq: Math.max(maxSeq, current.seq),
-            lastPointAt: Date.now()
-          }
-        };
+          p.seq < current.seq && (p.leg === current.leg || (i === 0 && points.length > 1)));
+        const m = { ...MV_RESET, mode: 'api', visible: true };
+        [...legPts, current].forEach(p => this.mvStep(m, p));
+        m.lastSeq = Math.max(maxSeq, current.seq);
+        this.mvPlan(m, s.agvTask, true);
+        m.shown = m.target;          // 애니메이션 없이 그 자리로
+        this.mvPos(m);
+        dbg('agv', 'resync', { seq: current.seq, leg: m.leg, from: m.from, dest: m.dest, points: legPts.length });
+        return { mv: m };
       }
 
-      const fresh = points.filter(p => p.seq > (m.lastSeq ?? -1));
+      const fresh = points.filter(p => p.seq > (m0.lastSeq ?? -1));
 
-      if (!fresh.length) return { mv: { ...m, mode: 'api' } };
+      if (!fresh.length) return { mv: { ...m0, mode: 'api' } };
 
       dbg('agv', `새 점 ${fresh.length}개`, fresh.map(p => `${p.seq}@${p.leg}${p.checkpoint ? ':' + p.checkpoint : ''}`).join(' '));
 
-      return {
-        mv: {
-          ...m,
-          mode: 'api',
-          queue: [...m.queue, ...fresh],
-          lastSeq: maxSeq,
-          lastPointAt: Date.now()
-        }
-      };
+      const m = { ...m0, mode: 'api' };
+      fresh.forEach(p => this.mvStep(m, p));
+      m.lastSeq = maxSeq;
+      this.mvPlan(m, s.agvTask);
+      return { mv: m };
 
     });
 
   }
 
 
+  // 점 하나 반영 (m 을 직접 고친다)
+  mvStep(m, p) {
+
+    m.lastPointAt = Date.now();
+
+    // 정차 중인데 같은 구간 점이 오면 버린다 (checkpoint 가 구간의 끝)
+    if (m.stopped && p.leg === m.leg && !p.checkpoint) return;
+
+    // 새 구간 — 직전 도착점에서 출발
+    if (p.leg !== m.leg) {
+      m.from = m.stopped ? m.place : null;
+      m.startCoord = (m.from && this.cpCoord[m.from]) || m.lastCoord || p.coord;
+      m.leg = p.leg;
+      m.dest = null;
+      m.route = null;
+      m.target = m.shown = 0;
+      m.legAt = Date.now();
+      m.stopped = false;
+      m.place = null;
+    }
+
+    if (p.coord) m.lastCoord = p.coord;
+
+    if (p.checkpoint) {
+      m.stopped = true;
+      m.place = p.checkpoint;
+    }
+
+  }
+
+
+  // 주문 단계로 본 목적지 — 출발지와 같으면 돌아가는 중으로 본다
+  taskDest(task, from) {
+    const sid = task && task.order ? task.order.sid : null;
+    let d = task.mode === 'discard' ? 'discard'
+      : (task.mode === 'dock' || task.mode === 'travel') && sid ? `station:${sid}`
+        : 'parking';
+    if (d === from) d = from === 'parking' ? null : 'parking';
+    return d;
+  }
+
+
+  // 목적지 · 고정 경로 · 진행률 정하기 (m 을 직접 고친다)
+  mvPlan(m, task, first) {
+
+    const want = m.stopped ? m.place : (legDest(m.leg) || this.taskDest(task, m.from));
+
+    // 경로 새로 — 구간 시작, 또는 가는 도중 목적지가 바뀜
+    if (want && (!m.route || m.dest !== want)) {
+
+      let start;
+      if (m.route && m.shown > 0) {
+        // 도중에 바뀜 → 지금 화면 위치·실제 좌표에서 다시
+        start = walkPath(m.route.pts, m.shown).at;
+        m.startCoord = m.lastCoord || m.startCoord;
+        m.legAt = Date.now();
+      } else if (m.from) {
+        start = placePoint(m.from);
+      } else if (!first) {
+        start = { x: m.x, y: m.y };
+      } else {
+        // 처음 보는데 출발지를 모름 → 대기장소에서 출발한 것으로 본다
+        start = want === 'parking' ? placePoint(want) : placePoint('parking');
+        if (want !== 'parking') m.startCoord = this.cpCoord.parking || m.startCoord;
+      }
+
+      const end = placePoint(want);
+      const pts = start.x === end.x && start.y === end.y ? [end] : routeTo(start, end);
+      dbg('agv', `경로 ${m.from || '?'} → ${want}`, Math.round(polyLen(pts)) + 'px');
+      m.dest = want;
+      m.route = { pts, len: polyLen(pts) };
+      m.target = m.shown = 0;
+
+    }
+
+    if (!m.route) return;
+
+    const len = m.route.len;
+
+    if (m.stopped) {
+      m.target = len;
+      return;
+    }
+
+    let r;
+    const dc = this.cpCoord[m.dest];
+    if (dc && m.startCoord && m.lastCoord) {
+      const total = coordDist(m.startCoord, dc);
+      r = total > 0 ? 1 - coordDist(m.lastCoord, dc) / total : 0;
+    } else {
+      // 목적지 실제 좌표를 모름 → 시간으로 추정
+      r = len > 0 ? (Date.now() - m.legAt) / 1000 * AGV_SPEED / len : 0;
+    }
+
+    r = Math.min(AGV_MOVE.maxProgress, Math.max(0, r));
+    m.target = Math.max(m.target, r * len);   // 뒤로 가지 않는다
+
+  }
+
+
   // =======================================================
-  // AGV 실제 이동 — 일정 속도로 큐를 따라감 (밀리면 빨라짐)
+  // AGV 실제 이동 — 고정 경로 위를 진행률만큼 (보고 사이는 부드럽게)
   // =======================================================
 
   mvTick() {
 
     const m0 = this.state.mv;
 
-    if (m0.mode !== 'api' || !m0.visible || !m0.queue.length) return;
+    if (m0.mode !== 'api' || !m0.visible) return;
+    if (m0.stopped && m0.route && m0.dest === m0.place && m0.shown >= m0.target) return;
 
     this.setState(s => {
 
-      const m = { ...s.mv, queue: s.mv.queue.slice(), trail: s.mv.trail.slice() };
+      const m = { ...s.mv };
 
-      // 다음 점으로 출발할 때 — 구간이 바뀌면 경로를 지우고 직전 도착점에서 새로
-      const begin = next => {
-        if (next.leg !== m.leg) {
-          m.trail = [{ x: m.x, y: m.y }];
-          m.leg = next.leg;
-          m.stopped = false;
-          m.place = null;
-        }
-      };
+      this.mvPlan(m, s.agvTask);
 
-      // 점에 도착
-      const arrive = p => {
-        m.x = p.x;
-        m.y = p.y;
-        m.trail.push(p);
-        if (p.checkpoint) {
-          m.stopped = true;
-          m.place = p.checkpoint;
-        }
-      };
+      const dt = AGV_MOVE.tickMs / 1000;
+      const diff = m.target - m.shown;
 
-      // 정차 중인데 같은 구간 점이 오면 버린다 (checkpoint 가 구간의 끝)
-      const dropStale = () => {
-        while (m.queue.length && m.stopped && m.queue[0].leg === m.leg) m.queue.shift();
-      };
-
-      dropStale();
-
-      // 너무 밀렸으면 마지막 점까지 바로
-      if (m.queue.length >= AGV_MOVE.teleportPoints) {
-        while (m.queue.length) {
-          const p = m.queue.shift();
-          begin(p);
-          arrive(p);
-        }
-        return { mv: m };
+      if (diff <= 0.5) {
+        m.shown = m.target;
+      } else {
+        m.shown += Math.min(diff, Math.max(AGV_MOVE.minSpeed * dt, diff * dt / AGV_MOVE.followSec));
       }
 
-      // 남은 점 수로 목표 배속을 정하고, 지금 배속을 그쪽으로 조금씩 옮긴다
-      const n = m.queue.length;
-      const endsAtStop = !!m.queue[n - 1].checkpoint;
-      const target =
-        n <= 1 ? (endsAtStop ? 1 : AGV_MOVE.slowFactor)
-          : n === 2 ? 1
-            : Math.min(AGV_MOVE.maxBoost, 1 + (n - 2) * AGV_MOVE.boostPerPoint);
-
-      const prevMul = m.speedMul || 1;
-      m.speedMul = prevMul + (target - prevMul) * AGV_MOVE.speedEase;
-
-      let step = (AGV_CELL_PX / AGV_MOVE.cellSec) * m.speedMul * (AGV_MOVE.tickMs / 1000);
-
-      while (step > 0 && m.queue.length) {
-
-        dropStale();
-        if (!m.queue.length) break;
-
-        const next = m.queue[0];
-        begin(next);
-
-        const d = Math.hypot(next.x - m.x, next.y - m.y);
-
-        if (step >= d) {
-          m.queue.shift();
-          arrive(next);
-          step -= d;
-        } else {
-          m.x += (next.x - m.x) / d * step;
-          m.y += (next.y - m.y) / d * step;
-          step = 0;
-        }
-
-      }
+      this.mvPos(m);
 
       return { mv: m };
 
@@ -2548,7 +2635,17 @@ class Component extends DCLogic {
   }
 
 
-  // 화면에 그릴 AGV — 실제 좌표 모드면 큐·경로로, 아니면 예전 값 그대로
+  // 경로 위 지금 거리 → 화면 위치
+  mvPos(m) {
+    const at = m.route ? walkPath(m.route.pts, m.shown).at
+      : m.from ? placePoint(m.from)
+        : { x: m.x, y: m.y };
+    m.x = at.x;
+    m.y = at.y;
+  }
+
+
+  // 화면에 그릴 AGV — 실제 좌표 모드면 고정 경로·진행률로, 아니면 예전 값 그대로
   agvForView() {
 
     const { mv: m, agv } = this.state;
@@ -2559,24 +2656,21 @@ class Component extends DCLogic {
       return { x: MV.PARK.x, y: MV.PARK.y, place: 'unknown', leg: null, ready: false, hidden: true, tickMs: AGV_MOVE.tickMs };
     }
 
-    const here = { x: m.x, y: m.y };
-    const done = [...m.trail, here];
-    const pts = [...done, ...m.queue.filter(p => p.leg === m.leg || !m.stopped)];
-    const doneLen = polyLen(done);
-
-    const moving = m.queue.length > 0 && !(m.stopped && m.queue.every(p => p.leg === m.leg));
-    const stale = !moving && !m.stopped && Date.now() - m.lastPointAt > AGV_MOVE.staleMs;
+    const moving = !m.stopped;
+    const stale = moving && Date.now() - m.lastPointAt > AGV_MOVE.staleMs;
 
     return {
       x: m.x,
       y: m.y,
       place: m.stopped && m.place ? m.place : moving ? 'moving' : 'idle',
-      leg: pts.length > 1 ? { pts, len: polyLen(pts), dist: doneLen } : null,
+      leg: m.route && m.route.len > 0
+        ? { pts: m.route.pts, len: m.route.len, dist: m.shown }
+        : null,
       ready: true,
       hidden: false,
       stale,
       // 다음 점을 기다리는 잠깐도 '이동 중' — checkpoint 에 도착해야 정차
-      inTransit: !m.stopped && !stale,
+      inTransit: moving && !stale,
       tickMs: AGV_MOVE.tickMs
     };
 
