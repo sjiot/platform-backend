@@ -10,6 +10,7 @@ import 'package:printing/printing.dart' show Printing;
 
 import 'theme/app_theme.dart';
 import 'services/api_service.dart';
+import 'services/app_logger.dart';
 // [신규] 플랫폼별 창 제어 분기(조건부 임포트).
 // - 웹(Chrome) 빌드 : kiosk_window_web.dart (전부 no-op)
 // - 그 외 모든 빌드  : kiosk_window_io.dart  (window_manager 기존 로직)
@@ -47,6 +48,9 @@ const String kExitPin = '2026';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // [신규] 원격 점검용 파일 로그(%LOCALAPPDATA%\ClickyKeyring\logs\app.log).
+  // 에러 핸들러/debugPrint 연동까지 한 번에 설정합니다.
+  await AppLog.init();
   // 창 크기/전체화면/최상단 고정 설정. 데스크톱에서는 기존과 동일하게
   // 동작하고, 웹에서는 아무것도 하지 않습니다.
   await initKioskWindow(kioskMode: kKioskWindowMode);
@@ -614,7 +618,7 @@ class _AppRootState extends State<AppRoot> {
 
       return true;
     } catch (e) {
-      print('>>> 재고 조회 실패: $e'); // 테스트 시 터미널 확인용
+      debugPrint('>>> 재고 조회 실패: $e'); // 테스트 시 터미널 확인용
 
       if (!mounted) return false;
 
@@ -1453,7 +1457,7 @@ class _AppRootState extends State<AppRoot> {
               });
             }
           } catch (e) {
-            print('>>> QR 조회 실패: $e');
+            debugPrint('>>> QR 조회 실패: $e');
           }
         }
 
@@ -1465,7 +1469,7 @@ class _AppRootState extends State<AppRoot> {
         return; // 성공했으므로 재시도 루프 종료
       } on TimeoutException {
         // "응답을 못 받은" 경우 → 같은 idempotency 키로 자동 재시도
-        print('>>> [주문] 응답 없음(타임아웃) — 재시도 $attempt/$maxAttempts');
+        debugPrint('>>> [주문] 응답 없음(타임아웃) — 재시도 $attempt/$maxAttempts');
         if (attempt == maxAttempts) {
           if (!mounted) return;
           setState(() {
@@ -1480,7 +1484,7 @@ class _AppRootState extends State<AppRoot> {
         continue;
       } on http.ClientException {
         // 이것도 "응답을 못 받은" 경우(연결 자체가 안 된 경우)이므로 동일하게 재시도
-        print('>>> [주문] 네트워크 연결 실패 — 재시도 $attempt/$maxAttempts');
+        debugPrint('>>> [주문] 네트워크 연결 실패 — 재시도 $attempt/$maxAttempts');
         if (attempt == maxAttempts) {
           if (!mounted) return;
           setState(() {
@@ -1500,7 +1504,7 @@ class _AppRootState extends State<AppRoot> {
         final message = e.toString();
         // [수정] 예전에는 서버가 실제로 뭐라고 응답했는지 콘솔에 안 남아서
         // 원인 파악이 어려웠습니다. 항상 원문을 출력합니다.
-        print('>>> [주문] 서버 응답 오류: $message');
+        debugPrint('>>> [주문] 서버 응답 오류: $message');
 
         // 이 시도는 결과가 확정되며 끝났으므로 idempotency 키를 버립니다.
         _orderAttemptId = null;

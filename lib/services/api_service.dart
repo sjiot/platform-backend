@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 
 // [신규] 플랫폼별 HTTP 클라이언트 분기(조건부 임포트).
@@ -243,7 +244,7 @@ class ApiService {
       final full = body['full'];
       return full is bool ? full : null;
     } catch (e) {
-      print('>>> [대기열] 조회 실패: $e');
+      debugPrint('>>> [대기열] 조회 실패: $e');
       return null;
     }
   }
@@ -274,7 +275,7 @@ class ApiService {
       if (remaining is num) return remaining.toInt();
       return null;
     } catch (e) {
-      print('>>> [용지 수] 조회 실패: $e');
+      debugPrint('>>> [용지 수] 조회 실패: $e');
       return null;
     }
   }
