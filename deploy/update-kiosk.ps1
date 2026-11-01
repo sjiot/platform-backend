@@ -4,7 +4,7 @@
 # 필요: GitHub CLI(gh) 설치 + `gh auth login` 1회 (비공개 저장소면 필수)
 # 주의: 한글 때문에 UTF-8 BOM 으로 저장되어 있습니다(Windows PowerShell 5.1 이 BOM 없으면 깨뜨림).
 param(
-  [string]$Repo       = "geumkyung06/SJIOT",
+  [string]$Repo       = "sjiot/platform-backend",
   [string]$InstallDir = "C:\SJIOT\kiosk",          # 앱(exe+dll+data)이 있는 폴더 — 실제 경로로 맞추세요
   [string]$ExeName    = "clicky_keyring.exe",
   [string]$TaskName   = "SJIOT-Kiosk"
