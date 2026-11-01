@@ -683,7 +683,6 @@
     <div style="border:1px solid #E2E5E9;border-radius:18px;background:#FFFFFF;box-shadow:0 2px 10px rgba(52,56,63,.04);padding:20px 24px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;min-width:0">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <span style="font-size:19px;font-weight:600">총 주문 건수</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8B9098;border:1px solid #E2E5E9;border-radius:6px;padding:3px 7px">누적 · 10s</span>
       </div>
       <div style="display:flex;align-items:baseline;gap:10px">
         <span style="font-family:'Chakra Petch',sans-serif;font-size:96px;font-weight:600;line-height:.95;letter-spacing:-.01em">{{ totalOrders }}</span>
@@ -702,7 +701,6 @@
       <div style="border:1px solid #E2E5E9;border-radius:18px;background:#FFFFFF;box-shadow:0 2px 10px rgba(52,56,63,.04);padding:20px 24px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;min-width:0">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:19px;font-weight:600">오늘 주문 건수</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8B9098;border:1px solid #E2E5E9;border-radius:6px;padding:3px 7px">10s</span>
         </div>
         <div style="display:flex;align-items:baseline;gap:8px">
           <span style="font-family:'Chakra Petch',sans-serif;font-size:72px;font-weight:600;line-height:.95">{{ todayOrders }}</span>
@@ -734,7 +732,6 @@
       <div style="border:1px solid #E2E5E9;border-radius:18px;background:#FFFFFF;box-shadow:0 2px 10px rgba(52,56,63,.04);padding:18px 20px 12px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;min-width:0">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:19px;font-weight:600">시간별 주문 추이</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8B9098;border:1px solid #E2E5E9;border-radius:6px;padding:3px 7px">{{ hourlyRange }}</span>
         </div>
         <div style="flex:1;position:relative;min-height:0">
           {{ hourlyChart }}
@@ -781,10 +778,6 @@
         <div style="display:flex;align-items:baseline;gap:9px;min-width:0">
           <span style="font-size:19px;font-weight:600;white-space:nowrap">실시간 재고 현황</span>
           <span style="font-size:12px;color:#8B9098;white-space:nowrap">{{ invCaption }}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#8B9098;white-space:nowrap">
-          <span style="{{ invLiveDot }}"></span>
-          5초
         </div>
       </div>
 
@@ -840,7 +833,6 @@
           <span style="display:flex;align-items:center;gap:4px"><span style="width:11px;height:4px;border-radius:2px;background:#E48F87"></span>부족 {{ invShortMax }} 이하</span>
           <span style="display:flex;align-items:center;gap:4px"><span style="width:11px;height:4px;border-radius:2px;background:#E2E5E9"></span>비활성·없음</span>
         </div>
-        <span style="font-family:'JetBrains Mono',monospace">{{ invUpdated }}</span>
       </div>
 
     </div>
@@ -1775,7 +1767,6 @@ class Component extends DCLogic {
     // -----------------------------------------------------
 
     stocks: {},
-    stocksAt: null,
 
 
     // -----------------------------------------------------
@@ -2026,8 +2017,7 @@ class Component extends DCLogic {
       const data = await this.getJson('/dashboard/stocks', '재고 조회 실패');
 
       this.setState({
-        stocks: data.stocks || {},
-        stocksAt: new Date()
+        stocks: data.stocks || {}
       });
 
       dbgChanged('dashboard/stocks', Object.keys(data.stocks || {}).length + ' keys');
@@ -2719,7 +2709,7 @@ class Component extends DCLogic {
   }
 
 
-  invView(stocks, stocksAt) {
+  invView(stocks) {
 
     const cells = [];
 
@@ -2866,14 +2856,6 @@ class Component extends DCLogic {
           ? `카트리지 ${INV_LETTERS.length * INV_ORDER.length} · 각 ${INV_MAX}개`
           : '재고 데이터 없음',
 
-      invLiveDot: {
-        width: '7px',
-        height: '7px',
-        borderRadius: '50%',
-        background: hasData ? '#8ECB9A' : P.line,
-        animation: hasData ? 'omPulse 2s ease-in-out infinite' : 'none'
-      },
-
       invTotal: hasData ? total.toLocaleString() : '—',
 
       invCapacity: hasData ? (active * INV_MAX).toLocaleString() : '—',
@@ -2907,12 +2889,7 @@ class Component extends DCLogic {
             fontWeight: 700,
             color: CAP_HEX[b.color]
           }
-        })),
-
-      invUpdated:
-        stocksAt
-          ? stocksAt.toTimeString().slice(0, 8)
-          : '--:--:--'
+        }))
 
     };
 
@@ -2998,7 +2975,6 @@ class Component extends DCLogic {
 
     if (!today.length) {
       return {
-        hourlyRange: '오늘',
         hourlyChart: el(
           'div',
           {
@@ -3138,7 +3114,6 @@ class Component extends DCLogic {
     });
 
     return {
-      hourlyRange: `${h0.getHours()}시 ~ 현재 · 1시간`,
       hourlyChart: el('svg', {
         width: W,
         height: H,
@@ -4335,7 +4310,6 @@ class Component extends DCLogic {
     const {
       now,
       stocks,
-      stocksAt,
       kpi,
       statistics,
       orders,
@@ -4433,7 +4407,7 @@ class Component extends DCLogic {
       // 재고
       // ===================================================
 
-      ...this.invView(stocks, stocksAt),
+      ...this.invView(stocks),
 
 
       // ===================================================
