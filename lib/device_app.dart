@@ -191,7 +191,8 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
     // 화면 진입하자마자 한 번 즉시 조회
     _fetchStationStatus();
 
-    // 이후 2초마다 조회
+    // 이후 호출 화면에 있는 동안 2초마다 조회
+    // (주문을 찾은 뒤에도 계속 돌아야 관리자 인증 · 주문 중단을 알 수 있다)
     _stationStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
 
@@ -213,6 +214,11 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
       return;
     }
 
+    // QR 인증 · 노쇼 요청이 가는 중이면 그 결과가 다음 화면을 정한다.
+    if (_isStarting || _isHandlingNoShow) {
+      return;
+    }
+
     if (_workstationNumber == null) {
       return;
     }
@@ -223,6 +229,15 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
 
     try {
       final result = await _api.getStationStatus(stationId: stationId);
+
+      if (!mounted) return;
+
+      // 응답을 기다리는 사이 화면이 바뀌었거나 QR 인증 · 노쇼 요청이 시작된 경우
+      if (_currentStep != DeviceStep.orderCall ||
+          _isStarting ||
+          _isHandlingNoShow) {
+        return;
+      }
 
       final String? orderId = result['order_id']?.toString();
 
@@ -240,29 +255,67 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
         return;
       }
 
-      if (!mounted) return;
+      final String? stage = result['stage']?.toString();
 
-      setState(() {
-        _calledOrderId = orderId;
-        _orderCallNumber = orderSeq;
-      });
+      switch (stage) {
+        case 'arrived':
+          // 같은 주문이면 그대로 둔다. (노쇼 타이머를 다시 시작하지 않는다)
+          if (orderId == _calledOrderId) return;
 
-      AppLog.i(
-        LogTag.state,
-        '주문 배정 감지: order=$orderId 대기번호=$orderSeq (조립대 $stationId)',
-      );
+          setState(() {
+            _calledOrderId = orderId;
+            _orderCallNumber = orderSeq;
+          });
 
-      // 주문을 찾았으므로 더 이상 폴링하지 않음
-      _stopStationStatusPolling();
+          AppLog.i(
+            LogTag.state,
+            '주문 배정 감지: order=$orderId 대기번호=$orderSeq (조립대 $stationId)',
+          );
 
-      // 3분 노쇼 타이머 시작
-      _startCallTimers();
+          // 3분 노쇼 타이머 시작
+          _startCallTimers();
+          break;
+
+        case 'verified':
+        case 'received':
+          // 이 단말에서 찍지 않았는데 인증된 주문. (관리자 대신 처리 · 앱 재시작)
+          _closeQrScanner('인증된 주문을 감지해 열려 있던 스캐너를 닫음');
+
+          _moveToWaiting(
+            orderId: orderId,
+            stationId: stationId,
+            data: result,
+            reason: '인증된 주문 감지 (stage=$stage)',
+          );
+          break;
+
+        case 'unclaimed':
+          // 처음 보는 주문이면 폐기 중인 지난 주문이므로 호출하지 않고 기다린다.
+          if (orderId != _calledOrderId) return;
+
+          _stopCallTimers();
+          _closeQrScanner('노쇼 처리된 주문을 감지해 열려 있던 스캐너를 닫음');
+
+          _setStep(DeviceStep.noShow, '노쇼 처리된 주문 감지 (stage=unclaimed)');
+          break;
+
+        default:
+          AppLog.w(LogTag.api, '조립대 $stationId: 처리하지 않는 stage=$stage');
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
 
       if (e.statusCode == 400) {
         // 아직 이 조립대에 주문이 없는 정상적인 대기 상태
         AppLog.d(LogTag.api, '조립대 $stationId: 아직 배정된 주문 없음');
+
+        // 호출 중이던 주문이 서버에서 사라진 경우 (관리자 중단 등)
+        if (_calledOrderId != null) {
+          AppLog.i(LogTag.state, '호출 중이던 주문 $_calledOrderId 종료 감지');
+
+          _stopCallTimers();
+          _closeQrScanner('호출 주문 종료로 열려 있던 스캐너를 닫음');
+        }
 
         setState(() {
           _calledOrderId = null;
@@ -324,15 +377,7 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
     _isHandlingNoShow = true;
 
     // 스캐너를 열어둔 채 시간이 지난 경우 스캐너를 먼저 닫는다.
-    if (_isQrScannerOpen) {
-      _isQrScannerOpen = false;
-
-      if (mounted) {
-        AppLog.d(LogTag.qr, '노쇼 처리로 열려 있던 스캐너를 닫음');
-
-        Navigator.of(context).pop();
-      }
-    }
+    _closeQrScanner('노쇼 처리로 열려 있던 스캐너를 닫음');
 
     final int stationId = int.parse(workstationNumber);
 
@@ -449,6 +494,7 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
     // start 요청이 끝날 때까지 노쇼 처리와 재호출을 보류한다.
     _isStarting = true;
     bool started = false;
+    bool recheckStatus = false;
 
     try {
       // POST /station/{order_id}/start
@@ -467,35 +513,15 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
       final String responseOrderId =
           startResult['order_id']?.toString() ?? scannedOrderId;
 
-      final String mbti = startResult['keycap']?.toString() ?? '';
-
-      final List<String> colors =
-          (startResult['colors'] as List<dynamic>?)
-              ?.map((e) => e.toString())
-              .toList() ??
-          [];
-
-      AppLog.i(
-        LogTag.api,
-        '조립 시작 성공: order=$responseOrderId keycap=$mbti colors=$colors',
-      );
+      AppLog.i(LogTag.api, '조립 시작 성공: order=$responseOrderId');
 
       if (!mounted) return;
 
-      // QR 인증에 성공했으므로 노쇼 타이머 중지
-      _stopCallTimers();
-
-      _setStep(
-        DeviceStep.waiting,
-        'QR 인증 성공 (start 200)',
-        update: () {
-          _order = OrderInfo(
-            orderId: responseOrderId,
-            mbti: mbti,
-            colors: colors,
-            assignedWorkstation: stationId,
-          );
-        },
+      _moveToWaiting(
+        orderId: responseOrderId,
+        stationId: stationId,
+        data: startResult,
+        reason: 'QR 인증 성공 (start 200)',
       );
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -534,8 +560,14 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
           AppLog.w(LogTag.state, 'start 409: 이미 처리되었거나 현재 조립대 주문이 아님');
 
           final errorMessage = e.data?['error']?.toString() ?? '이미 처리된 주문입니다.';
+          final conflictStage = e.data?['stage']?.toString();
 
-          _showMessage(errorMessage);
+          // 관리자가 먼저 인증한 경우라면 안내 없이 다음 화면으로 넘어간다.
+          if (conflictStage != 'verified' && conflictStage != 'received') {
+            _showMessage(errorMessage);
+          }
+
+          recheckStatus = true;
           break;
 
         default:
@@ -570,6 +602,58 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
           );
         }
       }
+
+      if (recheckStatus && mounted) {
+        _fetchStationStatus();
+      }
+    }
+  }
+
+  /// 인증된 주문의 부품 도착 대기 화면으로 넘어간다.
+  ///
+  /// [data]는 start 응답 또는 조립대 조회 응답이다. 둘 다 keycap · colors를 준다.
+  void _moveToWaiting({
+    required String orderId,
+    required int stationId,
+    required Map<String, dynamic> data,
+    required String reason,
+  }) {
+    final String mbti = data['keycap']?.toString() ?? '';
+
+    final List<String> colors =
+        (data['colors'] as List<dynamic>?)
+            ?.map((e) => e.toString())
+            .toList() ??
+        [];
+
+    AppLog.i(LogTag.state, '주문 정보: order=$orderId keycap=$mbti colors=$colors');
+
+    // 인증이 끝났으므로 노쇼 타이머 중지
+    _stopCallTimers();
+
+    _setStep(
+      DeviceStep.waiting,
+      reason,
+      update: () {
+        _order = OrderInfo(
+          orderId: orderId,
+          mbti: mbti,
+          colors: colors,
+          assignedWorkstation: stationId,
+        );
+      },
+    );
+  }
+
+  void _closeQrScanner(String reason) {
+    if (!_isQrScannerOpen) return;
+
+    _isQrScannerOpen = false;
+
+    if (mounted) {
+      AppLog.d(LogTag.qr, reason);
+
+      Navigator.of(context).pop();
     }
   }
 
