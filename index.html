@@ -160,11 +160,14 @@
   </div>
 </div>
 
+<script src="config.js"></script>
 <script>
 /* =====================================================================
-   설정
+   설정 (API_BASE · ADMIN_PW 는 config.js — config.example.js 참고)
    ===================================================================== */
+if (!window.APP_CONFIG) console.error('config.js 없음: config.example.js 를 복사해 만드세요');
 const CONFIG = {
+  ...window.APP_CONFIG,
   // id = GET /station/{station_id}/status 에 들어갈 값
   STATIONS: [
     { id: 1, name: '조립대 1' },
@@ -174,12 +177,9 @@ const CONFIG = {
   PER_PAGE: 20,          // 4열 × 5행
   PAGE_MS: 6000,         // 페이지 머무는 시간
   FLASH_MS: 10000,       // 새 호출 강조 시간
-  // ▼ API 서버 주소 — 프로토콜·포트 포함, 끝에 / 없이  (예: 'http://192.168.0.10:5000')
-  API_BASE: 'https://charry-erminia-revelational.ngrok-free.dev',
   POLL_MS: 1000,         // 상태 조회 주기 (호출 칸 · 대기 목록 모두)
   FETCH_TIMEOUT_MS: 5000, // 요청 하나가 이보다 오래 걸리면 실패 처리 (폴링 멈춤 방지)
-  ADMIN_PW: '202611',     // 관리자 비밀번호 (로고 3초 안에 7번 클릭 시 팝업)
-  ADMIN_TAPS: 7, ADMIN_WINDOW_MS: 3000,
+  ADMIN_TAPS: 7, ADMIN_WINDOW_MS: 3000,  // 로고 3초 안에 7번 클릭 시 관리자 팝업
   OFFLINE_AFTER: 3,      // 연속 이 횟수만큼 조회 실패해야 '연결 끊김' 표시
 };
 
