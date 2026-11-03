@@ -26,7 +26,7 @@ from services import line as line_state
 from services.archive import abort_order
 from services import snapshot as debug_snapshot
 from services.process import clear_fault
-from services.station_service import STATIONS, close_call, open_call, open_calls
+from services.station_service import STATIONS, close_call, open_call, open_calls, start_order
 from services.watchdog import CALL_EXTEND, MAX_CALL_EXTENDS
 from services.stock import get_stocks, max_count, ALL_SLOTS as STOCK_SLOTS
 
@@ -298,6 +298,57 @@ def admin_abort_order(order_id):
 
     logger.info(f"[admin] {order_id} 중단 {result['from_stage']} -> {result['final_stage']}")
     return jsonify({"ok": True, **result}), 200
+
+
+@bp.route("/admin/order/<order_id>/start", methods=["POST"])
+def admin_start_order(order_id):
+    """
+    QR 인증 대신 처리 — 손님이 QR을 찍지 못할 때 관리자가 인증한다
+    ---
+    tags:
+      - Admin
+    description: |
+      비밀번호를 확인한 뒤 `POST /station/<order_id>/start` 와 같은 경로로 처리한다.
+      검사 항목과 stage 전이도 같아서 arrived 에서만 통과한다.
+    parameters:
+      - in: path
+        name: order_id
+        type: string
+        required: true
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          example:
+            password: "관리자 비밀번호"
+            station_id: "1"
+          properties:
+            password:
+              type: string
+            station_id:
+              type: string
+              description: 주문이 배정된 조립대 번호
+    responses:
+      200:
+        description: 인증 처리 성공
+      400:
+        description: 비밀번호 불일치 · 아직 조립대에 배정되지 않은 주문
+      403:
+        description: station_id 불일치
+      404:
+        description: 존재하지 않거나 만료된 주문
+      409:
+        description: arrived 가 아니거나 이 조립대의 현재 주문이 아님
+    """
+    data = request.get_json(silent=True) or {}
+    if data.get("password") != STATION_RESET_PASSWORD:
+        return jsonify({"error": "비밀번호가 틀렸습니다"}), 400
+
+    payload, status = start_order(order_id, data.get("station_id", ""))
+    if status == 200:
+        logger.info(f"[admin] {order_id} QR 인증 대신 처리 station={payload['station_id']}")
+    return jsonify(payload), status
 
 
 @bp.route("/admin/reset", methods=["POST"])
