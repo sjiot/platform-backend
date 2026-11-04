@@ -1150,7 +1150,7 @@ const P = {
 // =========================================================
 
 const API_BASE_URL =
-  'https://192.168.0.100';
+  'http://192.168.0.100:5000';
 
 
 // =========================================================
@@ -2422,7 +2422,7 @@ class Component extends DCLogic {
 
 
   // 응답 반영 — 프론트 규칙
-  //   current == null       → 위치 모름, 마커 숨김
+  //   current == null       → 위치 모름, 마커는 대기장소에 '위치 확인 중'으로 표시
   //   처음 · resync · full  → 이번 구간 점들로 상태를 다시 만들고 그 자리로 바로
   //   그 외                 → seq 가 새로운 점만 차례로 반영
   mvApply(data, full) {
@@ -2453,7 +2453,7 @@ class Component extends DCLogic {
       const maxSeq = points.reduce((v, p) => Math.max(v, p.seq), m0.lastSeq ?? -1);
 
       if (!current) {
-        dbgChanged('agv:movement', 'current = null → 위치 모름');
+        dbgChanged('agv:movement', 'current = null → 위치 모름 (대기장소에 표시)');
         return {
           mv: { ...MV_RESET, mode: 'api', lastSeq: maxSeq >= 0 ? maxSeq : m0.lastSeq }
         };
@@ -2642,8 +2642,12 @@ class Component extends DCLogic {
 
     if (m.mode !== 'api') return { ...agv, hidden: false, tickMs: TICK_MS };
 
+    // 위치 모름 (current == null) — 대기장소에 서 있는 것으로 그린다
     if (!m.visible) {
-      return { x: MV.PARK.x, y: MV.PARK.y, place: 'unknown', leg: null, ready: false, hidden: true, tickMs: AGV_MOVE.tickMs };
+      return {
+        x: MV.PARK.x, y: MV.PARK.y, place: 'parking', leg: null,
+        ready: true, hidden: false, unknown: true, inTransit: false, tickMs: AGV_MOVE.tickMs
+      };
     }
 
     const moving = !m.stopped;
@@ -3450,8 +3454,8 @@ class Component extends DCLogic {
 
     if (o && o.fault) tone = 'warn';
 
-    // 실제 좌표 모드 — 위치 모름 · 신호 끊김
-    if (agv.hidden) {
+    // 실제 좌표 모드 — 위치 모름(대기장소에 표시) · 신호 끊김
+    if (agv.unknown) {
       text = '위치 확인 중';
       tone = 'idle';
     } else if (agv.stale) {

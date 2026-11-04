@@ -5,3 +5,4 @@ tools/__pycache__/
 
 # Redis 로컬 저장 파일
 dump.rdb
+.claude/
