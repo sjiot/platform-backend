@@ -240,7 +240,7 @@ class ReceiptPrinterService {
                 pw.SizedBox(height: 8),
                 pw.Center(
                   child: pw.Text(
-                    '주문번호가 호출되면 해당 조립대에서 QR을 스캔해주세요.',
+                    '주문번호가 호출되면\n해당 조립대에서 QR을 스캔해주세요',
                     textAlign: pw.TextAlign.center,
                     style: pw.TextStyle(
                       font: regularFont,
