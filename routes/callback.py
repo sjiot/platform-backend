@@ -1,9 +1,11 @@
 import json
+import time
 from collections import deque
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
+from infra import latency
 from infra.logger import logger
 from infra.mobius import _extract_notification_con
 
@@ -45,6 +47,21 @@ def _record(cnt, kind, detail):
 @bp.route("/mobius/callback/<path:cnt>", methods=["POST"])
 def mobius_callback(cnt):
     """Mobius 구독 알림 수신 (44개 컨테이너 공용)"""
+    received_at = time.time()
+    started = time.perf_counter()
+    token = latency.begin_trace()
+    g.callback_failed = False
+    try:
+        result = _handle_callback(cnt, received_at)
+        ok = result[1] < 400 and not g.callback_failed
+        latency.record("callback_handle", (time.perf_counter() - started) * 1000, ok=ok,
+                       cnt=cnt, status=result[1])
+        return result
+    finally:
+        latency.end_trace(token)
+
+
+def _handle_callback(cnt, received_at):
     data = request.get_json(force=True, silent=True) or {}
     sgn = data.get("m2m:sgn") or {}
 
@@ -53,6 +70,9 @@ def mobius_callback(cnt):
         logger.info(f"[callback:{cnt}] 구독 검증 요청 sur={sgn.get('sur')}")
         _record(cnt, "verification", {"sur": sgn.get("sur")})
         return _ack()
+
+    rep = (sgn.get("nev") or {}).get("rep") or {}
+    latency.record_subscribe(cnt, (rep.get("m2m:cin") or {}).get("rn"), received_at)
 
     parts = cnt.strip("/").split("/")
     group = parts[0]
@@ -77,6 +97,7 @@ def mobius_callback(cnt):
         handler(parts[1:], con)
     except Exception:
         logger.exception(f"[callback:{cnt}] 처리 실패")
+        g.callback_failed = True
 
     return _ack()
 

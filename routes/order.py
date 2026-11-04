@@ -15,6 +15,7 @@ from config import (QUEUE_KEY,
                     PAPER_KEY,
                    )
 
+from infra import latency
 from infra.logger import logger
 
 from infra.extensions import r
@@ -202,6 +203,7 @@ def post_order_list():
             "created_at": datetime.now(KST).isoformat()
         })
         _touch_order(order_id)          # 주문 스코프 키 6개를 한 묶음으로 (24시간)
+        latency.record("order_stage", 0, order_id=order_id, stage="queued", prev=None)
 
         # warehouse/station 여유가 있으면 방금 넣은 주문이 바로 배정될 수 있음
         assigned_order_id = try_assign_next()

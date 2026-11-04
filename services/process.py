@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone, timedelta
 
+from infra import latency
 from infra.extensions import r
 from infra.logger import logger
 from infra.keys import _touch_order
@@ -53,6 +54,7 @@ def set_stage(order_id, stage):
     r.hset(key, "stage", stage)
     _touch_order(order_id)
     logger.info(f"[stage] {order_id} {prev} -> {stage}")
+    latency.record("order_stage", 0, order_id=order_id, stage=stage, prev=prev)
 
     if stage in TERMINAL:
         watchdog.disarm(order_id)
@@ -241,6 +243,7 @@ def push_process(periodic=False):
     changed = fingerprint != r.get("process:last")
 
     if not changed and not periodic:
+        latency.record("process_push_skipped", 0)
         return True
 
     if changed:

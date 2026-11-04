@@ -1,5 +1,6 @@
 import time
 
+from infra import latency
 from infra.extensions import r
 from infra.logger import logger
 
@@ -85,10 +86,17 @@ def sweep():
     for order_id in r.zrangebyscore(DEADLINE_KEY, 0, time.time()):
         if r.zrem(DEADLINE_KEY, order_id) == 0:
             continue                      # 다른 워커가 먼저 가져갔다
+        started = time.perf_counter()
+        token = latency.begin_trace()
+        ok = True
         try:
             _expire(order_id)
         except Exception:
+            ok = False
             logger.exception(f"[watchdog] {order_id} 처리 실패")
+        finally:
+            latency.record("watchdog_expire", (time.perf_counter() - started) * 1000, ok=ok, order_id=order_id)
+            latency.end_trace(token)
 
 
 def _expire(order_id):

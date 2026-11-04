@@ -9,6 +9,7 @@ from flasgger import Swagger
 
 load_dotenv()
 
+from infra import latency
 from infra.logger import logger
 from infra.keys import _ensure_initial_state
 
@@ -75,6 +76,8 @@ def create_app():
         "basePath": "/",
     }
     Swagger(app, config=swagger_config, template=template)
+
+    latency.install_request_trace(app)
 
     app.register_blueprint(order_bp)
     app.register_blueprint(stock_bp)

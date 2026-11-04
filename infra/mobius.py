@@ -1,8 +1,10 @@
 import os
 import json
+import time
 import requests
 from datetime import datetime
 from infra.logger import logger
+from infra import latency
 
 from infra.extensions import r
 
@@ -31,11 +33,24 @@ def _headers(ty=None):
         h["Content-Type"] = f"application/json;ty={ty}"
     return h
 
+def _timed_request(part, cnt, method, url, **kwargs):
+    """Mobius 요청 1건을 측정한다. 실패도 남긴다 — 타임아웃이 빠지면 가장 느린 값이 사라진다."""
+    started = time.perf_counter()
+    try:
+        res = requests.request(method, url, **kwargs)
+    except requests.RequestException as e:
+        latency.record(part, (time.perf_counter() - started) * 1000, ok=False,
+                       cnt=cnt, error=type(e).__name__)
+        raise
+    latency.record(part, (time.perf_counter() - started) * 1000, ok=res.status_code in (200, 201),
+                   cnt=cnt, status=res.status_code, sent_bytes=len(res.request.body or b""))
+    return res
+
 def create_cin(cnt_rn, con_dict):
     url = f"{MP_URL}/{CB}/{AE_RN}/{cnt_rn}"
     body = {"m2m:cin": {"con": json.dumps(con_dict, ensure_ascii=False)}}
     try:
-        res = requests.post(url, headers=_headers(ty=4), json=body, timeout=(3, 5))
+        res = _timed_request("mobius_write", cnt_rn, "POST", url, headers=_headers(ty=4), json=body, timeout=(3, 5))
     except requests.RequestException as e:
         logger.error(f"[create_cin] {cnt_rn} 요청 실패: {e}")
         return False        # ← 예외를 여기서 흡수해야 _dispatch_order 롤백이 돌아감
@@ -50,7 +65,7 @@ def get_latest_con(cnt_rn):
     url = f"{MP_URL}/{CB}/{AE_RN}/{cnt_rn}/la"
 
     try:
-        res = requests.get(url, headers=_headers(), timeout=(3, 5))
+        res = _timed_request("mobius_read", cnt_rn, "GET", url, headers=_headers(), timeout=(3, 5))
     except requests.RequestException as e:
         logger.error(f"[get_latest_con] {cnt_rn} 요청 실패: {e}")
         return None
@@ -118,8 +133,8 @@ def _request(method, cnt_rn, url=None, params=None, what=""):
     """GET 한 번. 실패는 None 으로 접는다 — 복구가 조회 실패로 죽으면 안 된다."""
     target = url or f"{MP_URL}/{CB}/{AE_RN}/{cnt_rn}"
     try:
-        res = requests.request(method, target, headers=_headers(), params=params,
-                               timeout=(3, 8))
+        res = _timed_request("mobius_read", cnt_rn or what, method, target, headers=_headers(),
+                             params=params, timeout=(3, 8))
     except requests.RequestException as e:
         logger.error(f"[mobius] {what} {cnt_rn or target} 요청 실패: {e}")
         return None
