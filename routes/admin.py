@@ -28,6 +28,7 @@ from services import snapshot as debug_snapshot
 from services.process import clear_fault
 from services.station_service import STATIONS, close_call, open_call, open_calls, start_order
 from services.watchdog import CALL_EXTEND, MAX_CALL_EXTENDS
+from services import stock as stock_svc
 from services.stock import get_stocks, max_count, ALL_SLOTS as STOCK_SLOTS
 
 bp = Blueprint("admin", __name__)
@@ -750,12 +751,21 @@ def admin_stock():
     if stocks is None:
         return jsonify({"error": "재고 정보가 아직 없습니다"}), 503
 
+    # status 도 같이 싣는다 — 관리자 페이지가 disable 칸을 구분해 '고장 해제'로 보내야 한다.
+    # 창고 초기화 CIN 은 status 가 null 로 오므로 그때는 "unknown" 이다 (services/stock.get_status 와 동일).
+    states = stock_svc.all_states()
+    dead_shelves = stock_svc.driver_failed_shelves()
+
+    def _status(slot):
+        return (states.get(slot) or {}).get("status") or "unknown"
+
     result = {"board": {}, "keycap": {}}
 
     for color, qty in stocks.get("board", {}).items():
         result["board"][color] = {
             "qty": qty,
             "max": max_count(color),
+            "status": _status(color),
         }
 
     for slot, qty in stocks.get("keycap", {}).items():
@@ -764,6 +774,8 @@ def admin_stock():
         result["keycap"][letter][color] = {
             "qty": qty,
             "max": max_count(slot),
+            "status": _status(slot),
+            "shelf_failed": stock_svc.shelf_of(slot) in dead_shelves,   # 선반 드라이버 고장이면 idle 이어도 못 낸다
         }
 
     return jsonify(result), 200
@@ -842,6 +854,77 @@ def admin_stock_refill():
         "max": max_qty,
         "clamped": clamped,
         "status": existing.get("status"),
+    }), 200
+
+
+@bp.route('/admin/stock/revive', methods=['POST'])
+def admin_stock_revive():
+    """
+    고장(disable) 칸 해제 — 관리자 페이지에서 disable 칸을 눌렀을 때
+    ---
+    tags:
+      - Admin
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            part:
+              type: string
+              description: 재고 칸 이름 — 보드는 "r"·"y"·"g"·"b", 키캡은 "E_r" 형식
+              example: "E_r"
+            password:
+              type: string
+              description: "관리자 비밀번호 (STATION_RESET_PASSWORD). '고쳤다'는 선언이라 fault 해제와 같은 잠금"
+    responses:
+      200:
+        description: idle 로 되돌림. 그 선반의 드라이버 고장 표시가 있었으면 같이 지우고 shelf_cleared=true
+      400:
+        description: 비밀번호 불일치 · part 누락 · 존재하지 않는 칸 · 재고 데이터 없음
+      409:
+        description: disable 상태가 아닌 칸
+    """
+    data = request.get_json(silent=True) or {}
+    if data.get("password") != STATION_RESET_PASSWORD:
+        return jsonify({"error": "비밀번호가 틀렸습니다"}), 400
+
+    part = data.get("part")
+    if not part or not isinstance(part, str):
+        return jsonify({"error": "part가 필요합니다 (예: 'E_r' 또는 'r')"}), 400
+    if part not in STOCK_SLOTS:
+        return jsonify({"error": f"존재하지 않는 재고 칸입니다: {part}"}), 400
+
+    cur = stock_svc.get(part)
+    if cur is None:
+        return jsonify({"error": f"아직 재고 데이터가 없는 칸입니다: {part}"}), 400
+    if cur.get("status") != "disable":
+        return jsonify({"error": f"{part} 는 disable 상태가 아닙니다",
+                        "status": cur.get("status")}), 409
+
+    # count 는 창고가 보낸 마지막 값 그대로 둔다 (services/stock.revive_slots 원칙).
+    # 그 칸이 선반 드라이버 고장으로도 막혀 있으면 같이 푼다 — 사람이 '고쳤다'고 누른 것이고,
+    # 창고가 그 선반에서 정상 status 를 올리면 어차피 풀리는 표시다 (callbacks/warehouse.py).
+    revived = stock_svc.revive_slots([part])
+    shelf = stock_svc.shelf_of(part)
+    shelf_cleared = bool(stock_svc.clear_driver_failed(shelf)) if shelf else False
+    logger.info(f"[admin] {part} disable→idle (count={cur.get('count')})"
+                + (f" · 선반 {shelf} 드라이버 고장 표시 해제" if shelf_cleared else ""))
+
+    # 이 칸 때문에 blocked_by 로 기다리던 주문을 다시 배정해 본다 (콜백 복구와 같은 경로).
+    from services.dispatch import on_stock_recovered
+    assigned = on_stock_recovered()
+
+    return jsonify({
+        "ok": True,
+        "part": part,
+        "count": cur.get("count"),
+        "status": "idle",
+        "revived": revived,
+        "shelf": shelf,
+        "shelf_cleared": shelf_cleared,
+        "assigned": assigned,
     }), 200
 
 @bp.route('/admin/stations', methods=['GET'])
