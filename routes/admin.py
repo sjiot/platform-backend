@@ -25,7 +25,7 @@ from services import recovery
 from services import line as line_state
 from services.archive import abort_order
 from services import snapshot as debug_snapshot
-from services.process import clear_fault
+from services.process import clear_fault, clear_faults_at
 from services.station_service import STATIONS, close_call, open_call, open_calls, start_order
 from services.watchdog import CALL_EXTEND, MAX_CALL_EXTENDS
 from services import stock as stock_svc
@@ -847,6 +847,7 @@ def admin_stock_refill():
     r.hset("warehouse:stock", part, json.dumps(existing))
 
     logger.info(f"[admin] 재고 채움: {part} -> {count} (max={max_qty}, clamped={clamped})")
+
     return jsonify({
         "ok": True,
         "part": part,
@@ -880,7 +881,10 @@ def admin_stock_revive():
               description: "관리자 비밀번호 (STATION_RESET_PASSWORD). '고쳤다'는 선언이라 fault 해제와 같은 잠금"
     responses:
       200:
-        description: idle 로 되돌림. 그 선반의 드라이버 고장 표시가 있었으면 같이 지우고 shelf_cleared=true
+        description: >
+          idle 로 되돌림. 그 선반의 드라이버 고장 표시가 있었으면 같이 지우고 shelf_cleared=true.
+          이 칸·선반을 가리키는 주문 fault 가 있었으면 같이 해제하고 faults_cleared 에 주문 id 를 싣는다
+          (cnt_process 에 fault·fault_section 이 null 로 나간다).
       400:
         description: 비밀번호 불일치 · part 누락 · 존재하지 않는 칸 · 재고 데이터 없음
       409:
@@ -912,6 +916,12 @@ def admin_stock_revive():
     logger.info(f"[admin] {part} disable→idle (count={cur.get('count')})"
                 + (f" · 선반 {shelf} 드라이버 고장 표시 해제" if shelf_cleared else ""))
 
+    # 이 칸(또는 선반) 때문에 걸린 주문 fault 도 같은 선언으로 푼다 — 안 풀면 cnt_process 에
+    # fault·fault_section 이 계속 실려 창고가 멈춘 채로 본다. clear_fault 가 push 까지 한다.
+    faults_cleared = clear_faults_at(part)
+    if faults_cleared:
+        logger.info(f"[admin] {part} 되살림 → 주문 fault 해제 {faults_cleared}")
+
     # 이 칸 때문에 blocked_by 로 기다리던 주문을 다시 배정해 본다 (콜백 복구와 같은 경로).
     from services.dispatch import on_stock_recovered
     assigned = on_stock_recovered()
@@ -924,6 +934,7 @@ def admin_stock_revive():
         "revived": revived,
         "shelf": shelf,
         "shelf_cleared": shelf_cleared,
+        "faults_cleared": faults_cleared,
         "assigned": assigned,
     }), 200
 

@@ -7,7 +7,7 @@ from infra.logger import logger
 from infra.keys import _touch_order
 from infra.mobius import create_cin
 
-from config import KST, STAGE_ORDER, STATION_ORDER_PREFIX
+from config import KST, STAGE_ORDER, STATION_ORDER_PREFIX, WAREHOUSE_ORDER_KEY
 from services import collector, stock, watchdog
 
 _ALIAS = {
@@ -163,6 +163,43 @@ def clear_fault(order_id):
 
     watchdog.arm(order_id, stage)
     push_process()
+
+
+def clear_faults_at(slot):
+    """관리자가 칸을 되살렸다(/admin/stock/revive) — 그 자리를 가리키는 주문 fault 를 같이 푼다.
+    푼 주문 id 목록을 돌려준다.
+
+    칸 고장 해제와 주문 fault 해제는 같은 '고쳤다' 선언이다. 칸만 idle 로 돌리고 주문 fault 를
+    두면 cnt_process 에 fault·fault_section 이 계속 실려 창고는 여전히 멈춘 것으로 본다
+    (실측: E_r disable→idle 뒤에도 keycap_cartridge_failed @keycap1:E_r 이 그대로 나갔다).
+
+    대상은 fault_section 이 그 칸(keycap_cartridge:keycap1:E_r)이거나 그 칸의 선반
+    (keycap_cartridge:keycap1 — driver_failed)인 주문. 선반 고장은 칸 하나를 눌러도 '선반을
+    고쳤다'로 본다 — revive 가 그 선반의 driver_failed 표시를 같이 지우는 것과 같은 판단이다.
+    clear_fault 가 collector 재동기화·push_process 까지 한다.
+    """
+    targets = {stock.section_of(slot)}
+    if not stock.is_board(slot):
+        targets.add(stock.section_of(slot, shelf_only=True))
+
+    cleared = []
+    for oid in _faultable_order_ids():
+        fault, section = r.hmget(f"order:{oid}", "fault", "fault_section")
+        if not fault or section not in targets:
+            continue
+        logger.info(f"[fault] {oid} {fault} @{section} — {slot} 되살림에 따라 해제")
+        clear_fault(oid)
+        cleared.append(oid)
+    return cleared
+
+
+def _faultable_order_ids():
+    """fault 가 걸릴 수 있는 주문 = 조립대에 배정된 주문 + 창고가 든 주문. queued 는 fault 가 없다."""
+    ids = active_order_ids()
+    oid = r.get(WAREHOUSE_ORDER_KEY)
+    if oid and oid not in ids:
+        ids.append(oid)
+    return ids
 
 
 def _resume_stage(order_id, stage):
