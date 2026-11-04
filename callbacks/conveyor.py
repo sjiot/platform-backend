@@ -1,6 +1,9 @@
 """cnt_conveyor/* 콜백.
 
-    cnt_keycap_conveyor   {order_id, keycap1~4: done|failed}   전부 done → keycap_reached
+    cnt_keycap_conveyor   {order_id, section01|section02: done|failed}
+                                                               section02 done → keycap_reached
+                                                               failed → keycap_0N_belt_jammed
+                          {order_id, keycap1~4: done|failed}   이전 형식. 전부 done → keycap_reached
     cnt_tray_conveyor     {order_id, section1|section2: done}  section1 → tray_reached
                                                                section2 → pickup_reached
 """
@@ -12,6 +15,7 @@ from services import collector, stock
 from services.process import set_stage, set_fault, is_at_or_past
 
 KEYCAP_FIELDS = ("keycap1", "keycap2", "keycap3", "keycap4")
+KEYCAP_SECTIONS = (("section01", "01"), ("section02", "02"))
 
 
 def _keycap_result(con):
@@ -55,19 +59,31 @@ def on_keycap_conveyor(con):
     order_id, stage = got
 
     result = _keycap_result(con)
-    failed = [f for f in KEYCAP_FIELDS if result.get(f) == "failed"]
-    if failed:
-        # W7 미해결 — con은 키캡별(keycap1~4)인데 fault는 벨트 구간별(01/02)이라 축이 다르다.
-        # 창고팀이 section 필드를 넣어주기 전까지는 그 값이 있을 때만 구분한다.
-        section = str(con.get("section") or "01").zfill(2)
-        logger.error(f"[keycap_conveyor] {order_id} 실패 {failed} section={section}")
-        set_fault(order_id, f"keycap_{section}_belt_jammed",
-                  section=f"keycap_conveyor:{section}")
-        return
+    if any(field in result for field, _ in KEYCAP_SECTIONS):
+        for field, section in KEYCAP_SECTIONS:
+            if result.get(field) == "failed":
+                logger.error(f"[keycap_conveyor] {order_id} {field} 실패")
+                set_fault(order_id, f"keycap_{section}_belt_jammed",
+                          section=f"keycap_conveyor:{section}")
+                return
+        # section02 가 마지막 구간이다. section01 done 은 아직 이송 중이다.
+        if result.get("section02") != "done":
+            logger.info(f"[keycap_conveyor] {order_id} 진행 중 — {con}")
+            return
+    else:
+        # 이전 형식(keycap1~4). 구간 정보가 없으면 01 로 기록한다.
+        failed = [f for f in KEYCAP_FIELDS if result.get(f) == "failed"]
+        if failed:
+            section = str(con.get("section") or "01").zfill(2)
+            logger.error(f"[keycap_conveyor] {order_id} 실패 {failed} section={section}")
+            set_fault(order_id, f"keycap_{section}_belt_jammed",
+                      section=f"keycap_conveyor:{section}")
+            return
 
-    if not all(result.get(f) == "done" for f in KEYCAP_FIELDS):
-        logger.info(f"[keycap_conveyor] {order_id} 진행 중 — {con}")
-        return
+        if not all(result.get(f) == "done" for f in KEYCAP_FIELDS):
+            logger.info(f"[keycap_conveyor] {order_id} 진행 중 — {con}")
+            return
+
     if is_at_or_past(stage, "keycap_reached"):
         return                                   # 재전송
     set_stage(order_id, "keycap_reached")
