@@ -7,16 +7,17 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 class ReceiptPrinterService {
-  // SLK-TS100 = 80mm 영수증 프린터.
-  // [수정] 이 PC의 Windows 드라이버(SEWOO SLK-TS100)가 제공하는 용지는 폭
-  // 72mm(72×210, 72×297, 72×3297)뿐이고 기본 용지도 72×210입니다. 예전에는
-  // 80×180mm로 인쇄를 요청해서 드라이버가 지원하지 않는 크기였기 때문에,
-  // 기본 크기를 드라이버 기본 용지(72×210)에 맞춥니다.
-  // (실제 인쇄에서는 아래 _fitToPrinter가 프린터가 알려준 실제 용지 크기를
-  // 우선 사용하고, 이 값은 프린터가 크기를 알려주지 않을 때의 대비용입니다.)
+  // SLK-TS100 = 80mm 영수증 프린터. 드라이버 용지 폭은 72mm.
+  //
+  // [수정] 페이지 높이는 영수증 내용 길이(약 12.5cm)에 맞춥니다.
+  // 예전에는 드라이버 기본 용지(72×210)를 그대로 써서 영수증 한 장에
+  // 21cm 가 나오고 절반이 빈 종이였습니다. 드라이버 용지를 "롤(72×3297)"
+  // 로 두면 프린터는 PDF 페이지 끝(= 내용 끝)에서 자릅니다.
+  static const double _receiptHeightMm = 135;
+
   static final PdfPageFormat _receiptFormat = PdfPageFormat(
     72 * PdfPageFormat.mm,
-    210 * PdfPageFormat.mm,
+    _receiptHeightMm * PdfPageFormat.mm,
     marginAll: 4 * PdfPageFormat.mm,
   );
 
@@ -24,20 +25,17 @@ class ReceiptPrinterService {
   /// 실제 용지 크기). main.dart의 화면 우측 상단 점검 표시에 보여줍니다.
   static String? lastPrintInfo;
 
-  /// 프린터가 알려준 실제 용지 크기에 맞춰 PDF 페이지 크기를 정합니다.
-  /// 값이 이상하면(예: 3297mm 롤 길이) 종이가 한없이 나오지 않도록
-  /// 기본 크기로 되돌립니다.
+  /// 프린터가 알려준 용지 폭에 맞춰 PDF 페이지 크기를 정합니다.
+  /// 폭은 드라이버 값을 따르고(이상하면 72mm), 높이는 항상 영수증 내용
+  /// 길이로 고정합니다. 드라이버가 롤 용지(3297mm)를 알려줘도 그 길이를
+  /// 그대로 쓰지 않으므로 종이가 한없이 나오지 않습니다.
   static PdfPageFormat _fitToPrinter(PdfPageFormat reported) {
     const mm = PdfPageFormat.mm;
     final width =
         (reported.width >= 40 * mm && reported.width <= 90 * mm)
             ? reported.width
             : _receiptFormat.width;
-    final height =
-        (reported.height >= 100 * mm && reported.height <= 300 * mm)
-            ? reported.height
-            : _receiptFormat.height;
-    return PdfPageFormat(width, height, marginAll: 4 * mm);
+    return PdfPageFormat(width, _receiptHeightMm * mm, marginAll: 4 * mm);
   }
 
   /// 프린터 이름이 우리가 찾는 영수증 프린터(SLK-TS100/SEWOO)인지 확인합니다.
@@ -185,39 +183,27 @@ class ReceiptPrinterService {
               // 제목
               pw.Center(
                 child: pw.Text(
-                  '주문 영수증',
+                  '사물인터넷혁신융합대학사업단',
                   style: pw.TextStyle(
                     font: boldFont,
-                    fontSize: 19,
+                    fontSize: 13,
                   ),
                 ),
               ),
 
-              pw.SizedBox(height: 4),
-
-              pw.Center(
-                child: pw.Text(
-                  '나만의 MBTI 키링 만들기',
-                  style: pw.TextStyle(
-                    font: regularFont,
-                    fontSize: 10,
-                  ),
-                ),
-              ),
-
-              pw.SizedBox(height: 12),
+              pw.SizedBox(height: 8),
 
               pw.Divider(),
 
               pw.SizedBox(height: 8),
 
-              // 주문번호 크게
+              // 호출번호 크게
               pw.Center(
                 child: pw.Text(
                   orderNumber,
                   style: pw.TextStyle(
                     font: boldFont,
-                    fontSize: 24,
+                    fontSize: 32,
                   ),
                 ),
               ),
@@ -225,7 +211,7 @@ class ReceiptPrinterService {
               pw.SizedBox(height: 12),
 
               _infoRow(
-                label: '접수 시각',
+                label: '접수시각',
                 value: time,
                 font: regularFont,
                 boldFont: boldFont,
@@ -240,20 +226,7 @@ class ReceiptPrinterService {
                 boldFont: boldFont,
               ),
 
-              pw.SizedBox(height: 5),
-
-              _infoRow(
-                label: '키캡 색상',
-                value: keycapLabels.join(' / '),
-                font: regularFont,
-                boldFont: boldFont,
-              ),
-
-              pw.SizedBox(height: 12),
-
-              pw.Divider(),
-
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 14),
 
               // QR
               if (qrImage != null) ...[
@@ -264,10 +237,11 @@ class ReceiptPrinterService {
                     height: 38 * PdfPageFormat.mm,
                   ),
                 ),
-                pw.SizedBox(height: 6),
+                pw.SizedBox(height: 8),
                 pw.Center(
                   child: pw.Text(
-                    'QR을 스캔하여 주문 상태를 확인해주세요.',
+                    '주문번호가 호출되면 해당 조립대에서 QR을 스캔해주세요.',
+                    textAlign: pw.TextAlign.center,
                     style: pw.TextStyle(
                       font: regularFont,
                       fontSize: 8,
@@ -285,7 +259,7 @@ class ReceiptPrinterService {
                   ),
                 ),
 
-              pw.SizedBox(height: 14),
+              pw.SizedBox(height: 10),
 
               pw.Divider(),
 
