@@ -29,6 +29,8 @@ WAREHOUSE_ORDER_KEY = os.getenv("WAREHOUSE_ORDER_KEY", "warehouse:current_order"
 # 칸 status(warehouse:stock)는 창고가 보낸 CIN 그대로 두고, 파생 상태인 '선반 고장'만 여기 따로 둔다 —
 # 8칸에 disable 을 찍어두면 그중 한 칸에 idle CIN 하나만 와도 선반 고장이 조용히 풀린다.
 WAREHOUSE_DRIVER_KEY = os.getenv("WAREHOUSE_DRIVER_KEY", "warehouse:driver_failed")
+# 관리자가 채웠지만 창고가 아직 반영(count>0 보고)하지 않은 칸 — cnt_process 의 *_restock 원천
+WAREHOUSE_RESTOCK_KEY = os.getenv("WAREHOUSE_RESTOCK_KEY", "warehouse:restock")
 STATION_ORDER_PREFIX = os.getenv("STATION_ORDER_PREFIX", "station:current_order:")
 MAX_QUEUE_LEN = 3  # 조립대 개수와 동일 (그 이상 대기시켜봤자 처리 못 함)
 

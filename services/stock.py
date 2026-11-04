@@ -15,6 +15,7 @@ from datetime import datetime
 from config import (QUEUE_KEY,
                     STATION_ORDER_PREFIX,
                     WAREHOUSE_DRIVER_KEY,
+                    WAREHOUSE_RESTOCK_KEY,
                     KEYCAP_STOCK_MAX_COUNT,
                     BOARD_STOCK_MAX_COUNT,
                     KST,
@@ -33,6 +34,7 @@ from infra.mobius import get_latest_con
 
 STOCK_KEY = "warehouse:stock"
 DRIVER_KEY = WAREHOUSE_DRIVER_KEY
+RESTOCK_KEY = WAREHOUSE_RESTOCK_KEY
 STATIONS = ("1", "2", "3")
 
 # env(SUB_CNT_*)가 비어 있으면 규칙대로 생성
@@ -250,12 +252,36 @@ def get_out_of_stock():
     return out
 
 
+# ───────────────────────────────────────────────── 관리자 채움 → 창고 반영 대기
+#
+# cnt_process 의 keycap_restock / board_restock 은 "count 가 0 인 칸" 이 아니라
+# "관리자 콘솔에서 채웠는데 창고가 아직 반영하지 않은 칸" 이다. 창고가 0 을 보고했다고
+# 바로 목록에 넣으면, 사람이 실제로 채우기 전에 창고가 자기 카운터를 되돌려 버린다.
+#   POST /admin/stock/refill  → mark_restocked  → push_process (목록에 들어간다)
+#   창고가 그 칸 count>0 보고 → clear_restocked → push_process (목록에서 빠진다)
+
+def mark_restocked(slot):
+    """관리자가 채웠다. 창고가 count>0 을 올릴 때까지 restock 목록에 남는다."""
+    return r.sadd(RESTOCK_KEY, slot)
+
+
+def clear_restocked(slot):
+    """창고가 반영했다(또는 관리자가 0 으로 되돌렸다). 지운 개수(0/1)를 반환."""
+    return r.srem(RESTOCK_KEY, slot)
+
+
+def restocked_slots():
+    return set(r.smembers(RESTOCK_KEY) or [])
+
+
 def restock_list(kind):
-    """채워야 할 칸. disable은 넣지 않는다 — 채운다고 해결되는 게 아니라 사람이 고쳐야 한다."""
+    """cnt_process 에 실을 칸 — 관리자가 채웠고 창고가 아직 반영 전인 것.
+
+    count 0 · empty 는 보지 않는다. 그건 /stock/out(키오스크 품절) 과 blockers 가 맡는다.
+    정렬해서 돌려준다 — 순서가 흔들리면 내용이 같은데 push_process 지문이 달라진다.
+    """
     want_board = (kind == "board")
-    return sorted(slot for slot, v in all_states().items()
-                  if is_board(slot) == want_board
-                  and (int(v.get("count") or 0) <= 0 or v.get("status") == "empty"))
+    return sorted(slot for slot in restocked_slots() if is_board(slot) == want_board)
 
 
 # ───────────────────────────────────────────────── 부팅 시드

@@ -188,6 +188,11 @@ def on_cartridge_status(kind, cartridge_id, con):
     stock.put(cartridge_id, count, status)
     logger.info(f"[{kind}_status] {cartridge_id} count={count} status={status}")
 
+    # 관리자가 채운 칸을 창고가 반영했다(count>0) → restock 목록에서 뺀다.
+    # 목록이 바뀌었으니 아래 어느 갈래로 가든 push_process 가 새 seq 로 올린다.
+    if int(count or 0) > 0 and stock.clear_restocked(cartridge_id):
+        logger.info(f"[{kind}_status] {cartridge_id} 채움 반영 확인 — restock 목록에서 제거")
+
     if status in ("idle", "busy"):
         # 막혀 있던 칸이 풀렸다 → 보류된 주문을 다시 시도한다.
         # 이게 없으면 재고를 채워도 blocked_by 주문이 다음 종료까지 대기한다.
@@ -203,7 +208,8 @@ def on_cartridge_status(kind, cartridge_id, con):
             from services.dispatch import on_stock_recovered
             on_stock_recovered()
         else:
-            # count가 0이 되면 restock 목록이 바뀐다. 내용이 같으면 push_process가 안 올린다.
+            # count 0 은 restock 목록을 바꾸지 않는다 — 관리자가 채워야 들어간다.
+            # 위에서 목록이 바뀌었으면 여기서 나간다. 내용이 같으면 push_process가 안 올린다.
             push_process()
         return
 
@@ -266,4 +272,4 @@ def on_cartridge_status(kind, cartridge_id, con):
             return
 
     logger.warning(f"[{kind}_status] {cartridge_id}={status} — 해당 조합 주문 차단")
-    push_process()                          # 진행 주문이 없어도 restock 목록은 나가야 한다
+    push_process()                          # 진행 주문이 없어도 restock 목록 변화는 나가야 한다

@@ -846,7 +846,20 @@ def admin_stock_refill():
     existing["count"] = count
     r.hset("warehouse:stock", part, json.dumps(existing))
 
+    # 창고에 "이 칸을 채웠다" 를 알리는 건 여기뿐이다. 창고가 0 을 보고했을 때가 아니라
+    # 사람이 실제로 채우고 이 버튼을 눌렀을 때 cnt_process 의 *_restock 에 들어간다.
+    # 창고가 그 칸에 count>0 을 올리면 callbacks/warehouse.py 가 목록에서 뺀다.
+    if count > 0:
+        stock_svc.mark_restocked(part)
+    else:
+        stock_svc.clear_restocked(part)          # 0 으로 되돌림 = 창고가 반영할 게 없다
+
     logger.info(f"[admin] 재고 채움: {part} -> {count} (max={max_qty}, clamped={clamped})")
+
+    # 채워졌으니 이 칸 때문에 기다리던 주문을 다시 배정해 본다. 배정이 없어도
+    # on_stock_recovered 가 push_process 를 불러 restock 목록이 창고로 나간다.
+    from services.dispatch import on_stock_recovered
+    assigned = on_stock_recovered()
 
     return jsonify({
         "ok": True,
@@ -855,6 +868,8 @@ def admin_stock_refill():
         "max": max_qty,
         "clamped": clamped,
         "status": existing.get("status"),
+        "restock": count > 0,
+        "assigned": assigned,
     }), 200
 
 
