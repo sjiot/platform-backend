@@ -6,7 +6,12 @@ logs/latency/YYYY-MM-DD.jsonl 에 한 줄에 한 건씩 쌓는다.
 
 part: redis_write · redis_read · mobius_write · mobius_read · mobius_subscribe
       callback_handle · http_request · watchdog_expire   요청 1건. 같은 trace_id 의 Redis·Mobius 시간을 포함하므로 합산하지 않는다.
-      order_stage · process_push_skipped                 시각과 횟수만 보는 사건. ms 는 항상 0 이다.
+      order_stage · process_push_skipped · system        시각과 횟수만 보는 사건. ms 는 항상 0 이다.
+
+요청 1건 기록의 metrics: redis_ms · mobius_ms · code_ms · cpu_ms · rss_before_mb · rss_after_mb
+  cpu_ms 는 Redis·Mobius 호출 중 쓴 CPU 를 포함해 code_ms 와 더하면 안 된다.
+  RSS 는 프로세스 전체 값이다. 요청별 사용량이 아니라 증가 추세를 보는 용도다.
+system 의 metrics: PC CPU·메모리·스왑, 워커 RSS·사용률, 연결 대기열. LATENCY_SAMPLE_SEC 마다 워커별 1건.
 
 요청 스레드는 큐에 넣기만 하고 파일은 백그라운드 스레드가 쓴다 — 측정이 측정값을 늘리면 안 된다.
 조회·집계는 python -m infra.latency_report
@@ -36,6 +41,10 @@ LOG_DIR = os.getenv("LATENCY_DIR") or os.path.join(
 # CIN rn(4-YYYYMMDDHHMMSSmmm)의 시간대. 잘못되면 mobius_subscribe 가 약 ±32,400,000ms 로 나온다.
 RN_TZ = ZoneInfo(os.getenv("LATENCY_RN_TZ", "Asia/Seoul"))
 
+SAMPLE_SEC = float(os.getenv("LATENCY_SAMPLE_SEC", "5"))
+# 연결 대기열을 볼 gunicorn 포트 (-b 의 포트와 맞춘다)
+PORT = int(os.getenv("LATENCY_PORT", "8080"))
+
 _RN = re.compile(r"4-(\d{17})")
 
 _trace = contextvars.ContextVar("latency_trace", default=None)
@@ -44,6 +53,14 @@ _lock = threading.Lock()
 _worker = None
 _worker_pid = None
 _dropped = 0
+_busy = {"ms": 0.0, "requests": 0}
+_WORKER_PARTS = frozenset({"callback_handle", "http_request"})  # 워커 사용률에 넣는 요청
+_sampler_pid = None
+_process = None
+_process_pid = None
+_psutil = None
+_psutil_checked = False
+_MB = 1024 * 1024
 
 READ_COMMANDS = frozenset({
     "GET", "MGET", "EXISTS", "TTL", "PTTL", "TYPE", "SCAN",
@@ -57,24 +74,32 @@ _HASH_FIELD_ARGS = frozenset({"HGET", "HMGET", "HDEL", "HINCRBY", "HEXISTS"})
 
 
 # ── 기록 ────────────────────────────────────────────────────────────
-def record(part, ms, ok=True, **note):
+def record(part, ms, ok=True, metrics=None, **note):
     """측정 1건을 큐에 넣는다. 어떤 경우에도 서비스 흐름으로 예외를 올리지 않는다."""
     global _dropped
     if not ENABLED:
         return
     try:
+        trace = _trace.get()
         entry = {
             "created_at": datetime.now(KST).isoformat(timespec="milliseconds"),
             "part": part,
             "ms": round(ms, 3),
             "ok": ok,
-            "trace_id": _trace.get(),
+            "trace_id": trace["id"] if trace else None,
             "pid": os.getpid(),
             "thread": threading.current_thread().name,
             "note": note,
         }
+        if metrics:
+            entry["metrics"] = metrics
         if RUN_ID:
             entry["run_id"] = RUN_ID
+        if trace:
+            if part.startswith("redis_"):
+                trace["redis_ms"] += ms
+            elif part in ("mobius_read", "mobius_write"):
+                trace["mobius_ms"] += ms
         _ensure_worker()
         _queue.put_nowait(entry)
     except queue.Full:
@@ -139,11 +164,41 @@ atexit.register(flush)
 
 # ── trace ───────────────────────────────────────────────────────────
 def begin_trace():
-    return _trace.set(uuid.uuid4().hex[:8])
+    if not ENABLED:
+        return _trace.set(None)
+    return _trace.set({
+        "id": uuid.uuid4().hex[:8],
+        "cpu": time.thread_time(),
+        "rss": _rss_mb(),
+        "redis_ms": 0.0,
+        "mobius_ms": 0.0,
+    })
 
 
 def end_trace(token):
     _trace.reset(token)
+
+
+def record_request(part, ms, ok=True, **note):
+    """요청 1건 기록. 같은 trace 의 호출 시간을 빼서 코드 시간을 남긴다."""
+    if not ENABLED:
+        return
+    metrics = None
+    trace = _trace.get()
+    if trace:
+        metrics = {
+            "redis_ms": round(trace["redis_ms"], 3),
+            "mobius_ms": round(trace["mobius_ms"], 3),
+            "code_ms": round(max(0.0, ms - trace["redis_ms"] - trace["mobius_ms"]), 3),
+            "cpu_ms": round((time.thread_time() - trace["cpu"]) * 1000, 3),
+            "rss_before_mb": trace["rss"],
+            "rss_after_mb": _rss_mb(),
+        }
+    record(part, ms, ok, metrics=metrics, **note)
+    if part in _WORKER_PARTS:
+        with _lock:
+            _busy["ms"] += ms
+            _busy["requests"] += 1
 
 
 def install_request_trace(app):
@@ -165,8 +220,8 @@ def install_request_trace(app):
         started = g.pop("latency_started", None)
         if started is not None:
             rule = request.url_rule.rule if request.url_rule else "(unmatched)"
-            record("http_request", (time.perf_counter() - started) * 1000, ok=response.status_code < 400,
-                   route=f"{request.method} {rule}", status=response.status_code)
+            record_request("http_request", (time.perf_counter() - started) * 1000, ok=response.status_code < 400,
+                           route=f"{request.method} {rule}", status=response.status_code)
         return response
 
     @app.teardown_request
@@ -245,3 +300,113 @@ def record_subscribe(cnt, rn, received_at):
         return
     created = datetime.strptime(matched.group(1), "%Y%m%d%H%M%S%f").replace(tzinfo=RN_TZ)
     record("mobius_subscribe", (received_at - created.timestamp()) * 1000, cnt=cnt, cin_rn=rn)
+
+
+# ── PC 상태 ─────────────────────────────────────────────────────────
+def _load_psutil():
+    """psutil 이 없어도 서비스와 시간 측정은 계속 돌아야 한다."""
+    global _psutil, _psutil_checked
+    if not _psutil_checked:
+        _psutil_checked = True
+        try:
+            import psutil
+            _psutil = psutil
+        except ImportError:
+            logger.warning("[latency] psutil 없음 — CPU·메모리 상태를 기록하지 않는다")
+    return _psutil
+
+
+def _current_process():
+    global _process, _process_pid
+    psutil = _load_psutil()
+    if psutil is None:
+        return None
+    if _process_pid != os.getpid():
+        _process, _process_pid = psutil.Process(), os.getpid()
+    return _process
+
+
+def _rss_mb():
+    try:
+        process = _current_process()
+        return round(process.memory_info().rss / _MB, 2) if process else None
+    except Exception:
+        return None
+
+
+def accept_queue(port, paths=("/proc/net/tcp", "/proc/net/tcp6")):
+    """리눅스에서 port 의 연결 대기 수. 워커가 받아 가기를 기다리는 요청이다.
+
+    /proc/net/tcp 의 LISTEN(0A) 행은 rx_queue 가 대기 연결 수다. 읽을 수 없으면 None.
+    """
+    found = None
+    for path in paths:
+        try:
+            with open(path, encoding="ascii") as fp:
+                next(fp, None)
+                for line in fp:
+                    cols = line.split()
+                    if len(cols) > 4 and cols[3] == "0A" and int(cols[1].rsplit(":", 1)[1], 16) == port:
+                        found = (found or 0) + int(cols[4].split(":")[1], 16)
+        except (OSError, ValueError, IndexError):
+            continue
+    return found
+
+
+def sample_system(previous=None, now=None):
+    """PC 와 이 워커의 현재 상태. (metrics, 다음 호출에 넘길 값)"""
+    now = time.perf_counter() if now is None else now
+    with _lock:
+        busy_ms, requests = _busy["ms"], _busy["requests"]
+        _busy["ms"], _busy["requests"] = 0.0, 0
+
+    previous = previous or {}
+    elapsed = now - previous["at"] if "at" in previous else None
+    metrics = {
+        "worker_busy_pct": round(busy_ms / (elapsed * 1000) * 100, 1) if elapsed else None,
+        "requests": requests,
+        "accept_queue": accept_queue(PORT),
+        "load_1m": round(os.getloadavg()[0], 2),
+    }
+
+    current = {"at": now}
+    psutil = _load_psutil()
+    if psutil is not None:
+        cpu = psutil.cpu_times_percent(interval=None)
+        iowait = getattr(cpu, "iowait", None)           # 리눅스에만 있다
+        memory = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        process = _current_process()
+        current.update(sin=swap.sin, sout=swap.sout)
+        metrics.update({
+            "cpu_count": psutil.cpu_count(),
+            "cpu_pct": round(100 - cpu.idle - (iowait or 0), 1),
+            "iowait_pct": iowait,
+            "mem_available_mb": round(memory.available / _MB, 1),
+            "swap_used_mb": round(swap.used / _MB, 1),
+            "swap_in_mb": round((swap.sin - previous["sin"]) / _MB, 2) if "sin" in previous else None,
+            "swap_out_mb": round((swap.sout - previous["sout"]) / _MB, 2) if "sout" in previous else None,
+            "worker_rss_mb": round(process.memory_info().rss / _MB, 2),
+            "worker_cpu_pct": process.cpu_percent(interval=None),
+        })
+    return metrics, current
+
+
+def start_sampler():
+    """워커마다 1개. create_app 이 부른다 (--preload 면 스레드가 워커로 넘어가지 않는다)."""
+    global _sampler_pid
+    if not ENABLED or SAMPLE_SEC <= 0 or _sampler_pid == os.getpid():
+        return
+    _sampler_pid = os.getpid()
+
+    def loop():
+        _, previous = sample_system()               # CPU·스왑 기준값. 첫 값은 기록하지 않는다
+        while True:
+            time.sleep(SAMPLE_SEC)
+            try:
+                metrics, previous = sample_system(previous)
+                record("system", 0, metrics=metrics)
+            except Exception:
+                logger.exception("[latency] PC 상태 수집 실패")
+
+    threading.Thread(target=loop, name="latency-sampler", daemon=True).start()

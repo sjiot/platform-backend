@@ -95,7 +95,7 @@ def sweep():
             ok = False
             logger.exception(f"[watchdog] {order_id} 처리 실패")
         finally:
-            latency.record("watchdog_expire", (time.perf_counter() - started) * 1000, ok=ok, order_id=order_id)
+            latency.record_request("watchdog_expire", (time.perf_counter() - started) * 1000, ok=ok, order_id=order_id)
             latency.end_trace(token)
 
 

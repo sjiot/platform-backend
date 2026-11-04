@@ -36,14 +36,19 @@ def _headers(ty=None):
 def _timed_request(part, cnt, method, url, **kwargs):
     """Mobius 요청 1건을 측정한다. 실패도 남긴다 — 타임아웃이 빠지면 가장 느린 값이 사라진다."""
     started = time.perf_counter()
+    cpu_started = time.thread_time()
+
+    def cpu_metrics():
+        return {"cpu_ms": round((time.thread_time() - cpu_started) * 1000, 3)}
+
     try:
         res = requests.request(method, url, **kwargs)
     except requests.RequestException as e:
-        latency.record(part, (time.perf_counter() - started) * 1000, ok=False,
+        latency.record(part, (time.perf_counter() - started) * 1000, ok=False, metrics=cpu_metrics(),
                        cnt=cnt, error=type(e).__name__)
         raise
     latency.record(part, (time.perf_counter() - started) * 1000, ok=res.status_code in (200, 201),
-                   cnt=cnt, status=res.status_code, sent_bytes=len(res.request.body or b""))
+                   metrics=cpu_metrics(), cnt=cnt, status=res.status_code, sent_bytes=len(res.request.body or b""))
     return res
 
 def create_cin(cnt_rn, con_dict):

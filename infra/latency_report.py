@@ -3,7 +3,9 @@
   python -m infra.latency_report                        오늘 파트별 집계
   python -m infra.latency_report --by-target            cnt·Redis 키별 집계 추가
   python -m infra.latency_report --by-worker            워커(pid)·스레드별 집계 추가
-  python -m infra.latency_report --by-request           요청 종류별 Redis 왕복·CIN 수 추가
+  python -m infra.latency_report --by-request           요청 종류별 Redis·Mobius·코드 시간, CPU, RSS 증가 추가
+  python -m infra.latency_report --slow 10              느린 요청 10건 분해
+  python -m infra.latency_report --system               CPU·메모리·스왑, 워커 사용률, 연결 대기열 추가
   python -m infra.latency_report --stages               주문 단계 사이 소요 시간 추가
   python -m infra.latency_report --date 2026-11-04      특정 날짜
   python -m infra.latency_report --follow --window 60   최근 60초 실시간 갱신
@@ -26,7 +28,7 @@ from infra.latency import LOG_DIR       # noqa: E402
 
 PARTS = ("redis_write", "redis_read", "mobius_write", "mobius_read",
          "mobius_subscribe", "callback_handle", "http_request", "watchdog_expire")
-EVENT_PARTS = ("order_stage", "process_push_skipped")   # 시각·횟수만 보는 사건. ms 집계에서 뺀다
+EVENT_PARTS = ("order_stage", "process_push_skipped", "system")   # 시각·횟수만 보는 사건. ms 집계에서 뺀다
 REQUEST_PARTS = ("callback_handle", "http_request", "watchdog_expire")
 
 
@@ -99,12 +101,17 @@ def request_rows(entries):
         writes = [e for e in items if e["part"] == "mobius_write"]
         mobius = [e for e in items if e["part"] in ("mobius_read", "mobius_write")]
         name = request_name(note["cnt"]) if note.get("cnt") else note.get("route") or head["part"]
+        metrics = head.get("metrics") or {}
+        before, after = metrics.get("rss_before_mb"), metrics.get("rss_after_mb")
         groups[name].append({
             "redis_calls": len(redis),
             "cin": len(writes),
             "redis_ms": sum(e["ms"] for e in redis),
             "mobius_ms": sum(e["ms"] for e in mobius),
             "total_ms": head["ms"],
+            "code_ms": metrics.get("code_ms", 0),
+            "cpu_ms": metrics.get("cpu_ms", 0),
+            "rss_growth": after - before if before is not None and after is not None else 0,
         })
 
     rows = []
@@ -120,6 +127,9 @@ def request_rows(entries):
             "mobius_ms": statistics.median(i["mobius_ms"] for i in items),
             "total_p50": statistics.median(i["total_ms"] for i in items),
             "total_p95": percentile(sorted(i["total_ms"] for i in items), 0.95),
+            "code_ms": statistics.median(i["code_ms"] for i in items),
+            "cpu_ms": statistics.median(i["cpu_ms"] for i in items),
+            "rss_growth": sum(i["rss_growth"] for i in items),
         })
     return sorted(rows, key=lambda row: -row["count"] * row["total_p50"])
 
@@ -127,13 +137,83 @@ def request_rows(entries):
 def render_requests(rows):
     width = max([len(row["name"]) for row in rows] + [6])
     lines = [f'{"요청":<{width - 2}} {"건수":>6} {"Redis수":>9} {"최대":>5} {"CIN":>5} {"최대":>5} '
-             f'{"Redis ms":>9} {"Mobius ms":>10} {"p50":>9} {"p95":>9}']
+             f'{"Redis ms":>9} {"Mobius ms":>10} {"코드 ms":>8} {"CPU ms":>8} {"p50":>9} {"p95":>9} {"RSS증가MB":>7}']
     for row in rows:
         lines.append(f'{row["name"]:<{width}} {row["count"]:>8} {row["redis_calls"]:>10.1f} '
                      f'{row["redis_calls_max"]:>7} {row["cin"]:>5.1f} {row["cin_max"]:>7} '
                      f'{row["redis_ms"]:>9.2f} {row["mobius_ms"]:>10.2f} '
-                     f'{row["total_p50"]:>9.2f} {row["total_p95"]:>9.2f}')
+                     f'{row["code_ms"]:>9.2f} {row["cpu_ms"]:>8.2f} '
+                     f'{row["total_p50"]:>9.2f} {row["total_p95"]:>9.2f} {row["rss_growth"]:>12.2f}')
     return "\n".join(lines)
+
+
+def _metric(entries, name):
+    return [e["metrics"][name] for e in entries if (e.get("metrics") or {}).get(name) is not None]
+
+
+def _span(values, fmt="{:.1f}"):
+    if not values:
+        return "-"
+    return f"{fmt.format(statistics.median(values))} / {fmt.format(max(values))}"
+
+
+def render_system(entries):
+    """워커별 PC 상태. 값은 p50 / 최대 순서다."""
+    groups = defaultdict(list)
+    for entry in entries:
+        if entry["part"] == "system":
+            groups[entry.get("pid")].append(entry)
+    if not groups:
+        return "PC 상태 기록 없음"
+
+    lines = []
+    for pid, items in sorted(groups.items()):
+        rss = _metric(items, "worker_rss_mb")
+        available = _metric(items, "mem_available_mb")
+        swap_io = [a + b for a, b in zip(_metric(items, "swap_in_mb"), _metric(items, "swap_out_mb"))]
+        cores = _metric(items, "cpu_count")
+        lines += [
+            f"pid={pid}  샘플 {len(items)}건  (값은 p50 / 최대)",
+            f'  워커 사용률 %     {_span(_metric(items, "worker_busy_pct"))}',
+            f'  연결 대기열       {_span(_metric(items, "accept_queue"), "{:.0f}")}',
+            f'  PC CPU %          {_span(_metric(items, "cpu_pct"))}   iowait % {_span(_metric(items, "iowait_pct"))}',
+            f'  부하(1분)         {_span(_metric(items, "load_1m"), "{:.2f}")}   코어 {cores[-1] if cores else "-"}개',
+            f'  사용 가능 메모리  최소 {min(available) if available else "-"} MB',
+            f'  스왑              사용 최대 {max(_metric(items, "swap_used_mb") or [0])} MB   '
+            f'입출력 최대 {max(swap_io or [0]):.2f} MB',
+            f'  워커 RSS          처음 {rss[0] if rss else "-"} MB -> 마지막 {rss[-1] if rss else "-"} MB',
+        ]
+    return "\n".join(lines)
+
+
+def render_slow(entries, top):
+    heads = sorted((e for e in entries if e["part"] in REQUEST_PARTS), key=lambda e: -e["ms"])[:top]
+    lines = [f'{"시각":<10} {"처리":>9} {"Redis":>9} {"Mobius":>9} {"코드":>9} {"CPU":>9}  대상']
+    for entry in heads:
+        m = entry.get("metrics") or {}
+        note = entry.get("note") or {}
+        lines.append(f'{entry["created_at"][11:23]:<12} {entry["ms"]:>11.2f} {m.get("redis_ms", 0):>9.2f} '
+                     f'{m.get("mobius_ms", 0):>9.2f} {m.get("code_ms", 0):>11.2f} {m.get("cpu_ms", 0):>9.2f}  '
+                     f'{note.get("cnt") or note.get("route") or entry["part"]}')
+    return "\n".join(lines)
+
+
+def print_sections(entries, args):
+    """파트별 표 아래에 붙는 선택 항목. 하루 집계와 실시간 조회가 같이 쓴다."""
+    if args.by_target:
+        print("\n" + render(target_rows(entries, args.top)))
+    if args.by_worker:
+        print("\n" + render(worker_rows(entries)))
+    if args.by_request:
+        rows = request_rows(entries)
+        print("\n요청별 중앙값 (RSS증가는 합계)\n" + (render_requests(rows) if rows else "trace 가 붙은 요청 없음"))
+    if args.slow:
+        print("\n느린 요청\n" + render_slow(entries, args.slow))
+    if args.stages:
+        rows = stage_rows(entries)
+        print("\n단계 사이 소요 시간 (단위 초)\n" + (render(rows) if rows else "단계 기록 없음"))
+    if args.system:
+        print("\n" + render_system(entries))
 
 
 def stage_rows(entries):
@@ -220,10 +300,7 @@ def follow(args):
         print(f'{datetime.now(KST).strftime("%H:%M:%S")}  최근 {args.window}초  {len(entries)}건  단위 ms  (Ctrl+C 종료)\n')
         if entries:
             print(render(part_rows(entries)))
-            if args.by_target:
-                print("\n" + render(target_rows(entries, args.top)))
-            if args.by_worker:
-                print("\n" + render(worker_rows(entries)))
+            print_sections(entries, args)
         else:
             print(f"기록 없음: {path}\n서버를 LATENCY_LOG=1 로 실행했는지 확인한다")
         time.sleep(args.interval)
@@ -238,6 +315,8 @@ def main():
     ap.add_argument("--by-worker", action="store_true")
     ap.add_argument("--by-request", action="store_true")
     ap.add_argument("--stages", action="store_true")
+    ap.add_argument("--system", action="store_true")
+    ap.add_argument("--slow", type=int, default=0, help="느린 요청 N건 분해")
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--follow", action="store_true")
     ap.add_argument("--window", type=int, default=60)
@@ -264,16 +343,7 @@ def main():
         return
     print(f"{path}  {len(entries)}건  단위 ms\n")
     print(render(part_rows(entries)))
-    if args.by_target:
-        print("\n" + render(target_rows(entries, args.top)))
-    if args.by_worker:
-        print("\n" + render(worker_rows(entries)))
-    if args.by_request:
-        rows = request_rows(entries)
-        print("\n요청별 중앙값\n" + (render_requests(rows) if rows else "trace 가 붙은 요청 없음"))
-    if args.stages:
-        rows = stage_rows(entries)
-        print("\n단계 사이 소요 시간 (단위 초)\n" + (render(rows) if rows else "단계 기록 없음"))
+    print_sections(entries, args)
     counts = event_counts(entries)
     print(f'\n단계 전이 {counts["order_stage"]}건, cnt_process 중복 생략 {counts["process_push_skipped"]}건')
 

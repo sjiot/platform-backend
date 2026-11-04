@@ -28,6 +28,7 @@ def _boot_background():
     from services import stock, watchdog
 
     watchdog.start_sweeper()
+    latency.start_sampler()
 
     def seed():
         # 구독은 '앞으로 바뀌는 것'만 알려준다. 지금 재고는 직접 읽어야 한다.

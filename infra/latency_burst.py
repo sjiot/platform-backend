@@ -83,7 +83,8 @@ def main():
     log_dir = tempfile.mkdtemp(prefix="latency_burst_")
     env = {**os.environ,
            "MP_URL": f"http://127.0.0.1:{stub.server_port}", "AE_RN": AE, "REDIS_URL": a.redis,
-           "LATENCY_LOG": "1", "LATENCY_DIR": log_dir}
+           "LATENCY_LOG": "1", "LATENCY_DIR": log_dir,
+           "LATENCY_SAMPLE_SEC": "1", "LATENCY_PORT": str(a.port)}
     env.pop("LATENCY_RUN_ID", None)
     server = subprocess.Popen(
         [sys.executable, "-m", "gunicorn", "-w", str(a.workers), "-b", f"127.0.0.1:{a.port}", "app:create_app()"],
@@ -141,6 +142,10 @@ def main():
     for pid in sorted({e["pid"] for e in handled}):
         mine = [e["ms"] for e in handled if e["pid"] == pid]
         print(f"  pid={pid}  처리 {len(mine)}건  처리 시간 합 {sum(mine) / 1000:.1f}s")
+    samples = [e["metrics"] for e in entries if e["part"] == "system"]
+    for name in ("worker_busy_pct", "accept_queue", "cpu_pct", "mem_available_mb", "worker_rss_mb"):
+        values = [m[name] for m in samples if m.get(name) is not None]
+        print(f"  {name:<18} " + (f"최소 {min(values)}  최대 {max(values)}" if values else "기록 없음"))
     print(f"기록: {log_dir}")
 
 

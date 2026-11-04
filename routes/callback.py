@@ -54,8 +54,8 @@ def mobius_callback(cnt):
     try:
         result = _handle_callback(cnt, received_at)
         ok = result[1] < 400 and not g.callback_failed
-        latency.record("callback_handle", (time.perf_counter() - started) * 1000, ok=ok,
-                       cnt=cnt, status=result[1])
+        latency.record_request("callback_handle", (time.perf_counter() - started) * 1000, ok=ok,
+                               cnt=cnt, status=result[1])
         return result
     finally:
         latency.end_trace(token)
