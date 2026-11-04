@@ -38,14 +38,16 @@ RUN_ID = os.getenv("LATENCY_RUN_ID")
 LOG_DIR = os.getenv("LATENCY_DIR") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "latency")
 
-# CIN rn(4-YYYYMMDDHHMMSSmmm)의 시간대. 잘못되면 mobius_subscribe 가 약 ±32,400,000ms 로 나온다.
-RN_TZ = ZoneInfo(os.getenv("LATENCY_RN_TZ", "Asia/Seoul"))
+# CIN rn 앞 17자리(4-YYYYMMDDHHMMSSmmm)의 시간대. 실제 Mobius 는 UTC 로 찍는다 (2026-11-04 서버 확인).
+# 잘못되면 mobius_subscribe 가 약 ±32,400,000ms 로 나온다.
+RN_TZ = ZoneInfo(os.getenv("LATENCY_RN_TZ", "UTC"))
 
 SAMPLE_SEC = float(os.getenv("LATENCY_SAMPLE_SEC", "5"))
 # 연결 대기열을 볼 gunicorn 포트 (-b 의 포트와 맞춘다)
 PORT = int(os.getenv("LATENCY_PORT", "8080"))
 
-_RN = re.compile(r"4-(\d{17})")
+# 실제 rn 은 4-20261104101509559008000 처럼 17자리 뒤에 일련번호 6자리가 더 붙는다. 뒤는 버린다.
+_RN = re.compile(r"4-(\d{17})\d*")
 
 _trace = contextvars.ContextVar("latency_trace", default=None)
 _queue = queue.Queue(maxsize=50000)

@@ -14,6 +14,7 @@
 | [03-improvements.md](03-improvements.md) | 개선 후보별 현재 코드, 가설, 비교 지표, 위험 |
 | [04-experiments.md](04-experiments.md) | 리눅스 실험 환경과 절차, 결과 기록표 |
 | [05-poster-outline.md](05-poster-outline.md) | 포스터 구성, 그림·표 틀, 표현 주의점 |
+| [06-writing-guide.md](06-writing-guide.md) | 유사 논문 목록, 범위 결정, 2쪽 양식 기준 절별 구성 |
 
 ## 논문의 중심 내용
 

@@ -90,7 +90,7 @@ find logs/latency -name '*.jsonl.gz' -mtime +30 -delete            # 30일 지�
 | `LATENCY_LOG` | `1`이면 기록 | 꺼짐 |
 | `LATENCY_RUN_ID` | 측정 묶음 이름 | 없음 |
 | `LATENCY_DIR` | 저장 폴더 | `logs/latency` |
-| `LATENCY_RN_TZ` | CIN `rn`의 시간대 | `Asia/Seoul` |
+| `LATENCY_RN_TZ` | CIN `rn` 앞 17자리의 시간대. 실제 Mobius는 UTC로 찍는다 | `UTC` |
 | `LATENCY_SAMPLE_SEC` | PC 상태 기록 주기(초), `0`이면 끔 | `5` |
 | `LATENCY_PORT` | 연결 대기열을 볼 gunicorn 포트 | `8080` |
 
@@ -137,7 +137,8 @@ Mobius 호출 기록에는 그 호출의 `cpu_ms`도 남는다. Redis 호출은 
 
 - `callback_handle`, `http_request`, `watchdog_expire`에는 같은 요청의 Redis와 Mobius 시간이 들어 있다. 파트별 값을 모두 더하면 안 된다.
 - `cpu_ms`와 `code_ms`도 더하면 안 된다. 겹치는 시간이 있다.
-- `mobius_subscribe`에는 두 서버의 시계 차이가 그대로 들어간다. 약 32,400,000ms로 나오면 `LATENCY_RN_TZ=UTC`로 바꾼다.
+- `mobius_subscribe`에는 두 서버의 시계 차이가 그대로 들어간다. 약 ±32,400,000ms로 나오면 `LATENCY_RN_TZ`가 틀린 것이다.
+- 실제 `rn`은 `4-20261104101509559008000`처럼 17자리 뒤에 일련번호 6자리가 붙는다. 2026-11-04 이전 버전은 17자리 전체 일치와 Asia/Seoul을 가정해 이 기록이 0건이었다.
 - 장비가 Mobius에 올리는 시간은 측정되지 않는다.
 
 ## 3. 찾는 순서
