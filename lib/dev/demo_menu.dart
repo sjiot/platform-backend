@@ -4,7 +4,7 @@ import '../models/device_step.dart';
 import '../theme/app_colors.dart';
 
 // 개발 중 각 화면을 직접 확인하기 위한 테스트 메뉴
-// 배포 전 제거
+// 디버그 빌드(flutter run)에서만 보인다. (device_app.dart의 kDebugMode 조건)
 
 class DemoMenu extends StatelessWidget {
   final VoidCallback onWaiting;

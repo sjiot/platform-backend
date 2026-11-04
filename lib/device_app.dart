@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show File;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -1204,21 +1205,23 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
                     ),
 
                   /// 화면 확인용 테스트 메뉴
-                  Positioned(
-                    right: 24,
-                    bottom: 24,
-                    child: DemoMenu(
-                      onWaiting: () => _demoMoveTo(DeviceStep.waiting),
-                      onAuthenticated: () =>
-                          _demoMoveTo(DeviceStep.authenticated),
-                      onAssembling: () => _demoMoveTo(DeviceStep.assembling),
-                      onCompleted: () => _demoMoveTo(DeviceStep.completed),
-                      onInvalidQr: () => _demoMoveTo(DeviceStep.invalidQr),
-                      onWrongWorkstation: () =>
-                          _demoMoveTo(DeviceStep.wrongWorkstation),
-                      onNoShow: () => _demoMoveTo(DeviceStep.noShow),
+                  /// 디버그 빌드(flutter run)에서만 보인다. 기기에 까는 릴리즈 APK에는 없음.
+                  if (kDebugMode)
+                    Positioned(
+                      right: 24,
+                      bottom: 24,
+                      child: DemoMenu(
+                        onWaiting: () => _demoMoveTo(DeviceStep.waiting),
+                        onAuthenticated: () =>
+                            _demoMoveTo(DeviceStep.authenticated),
+                        onAssembling: () => _demoMoveTo(DeviceStep.assembling),
+                        onCompleted: () => _demoMoveTo(DeviceStep.completed),
+                        onInvalidQr: () => _demoMoveTo(DeviceStep.invalidQr),
+                        onWrongWorkstation: () =>
+                            _demoMoveTo(DeviceStep.wrongWorkstation),
+                        onNoShow: () => _demoMoveTo(DeviceStep.noShow),
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
