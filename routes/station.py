@@ -1,29 +1,25 @@
 import math
-from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
-from config import (ORDER_TTL,
-                    STATION_KEY,
+from config import (STATION_KEY,
                     STATION_ORDER_PREFIX,
-                    STATION_VERIFIED_PREFIX,
                     STATION_UNCLAIM_MIN_SEC,
-                    KST,
                    )
 
 from infra.logger import logger
 
 from infra.extensions import r
-from services.process import set_stage, is_before, is_after
+from services.process import is_before, is_after
 from services.archive import finish_order
 from services.watchdog import DEADLINE_KEY
-from infra.keys import (_touch_order,
-                        _order_counter_key,
+from infra.keys import (_order_counter_key,
                         _ensure_initial_state,
                       )
 
 from services.order_service import _is_valid_mbti
 from services.station_service import (elapsed_since_arrival,
+                                      start_order,
                                       unclaim_guard,
                                       check_station_timeouts)
 
@@ -69,46 +65,8 @@ def station_start(order_id):
         description: 이미 진행 중
     """
     data = request.get_json(silent=True) or {}
-    req_station_id = str(data.get("station_id", ""))
-
-    order_data = r.hgetall(f"order:{order_id}")
-    if not order_data:
-        return jsonify({'error': '존재하지 않거나 만료된 주문입니다'}), 404
-
-    assigned_station_id = order_data.get("station_id")
-    if not assigned_station_id:
-        return jsonify({'error': '아직 조립대에 배정되지 않은 주문입니다'}), 400
-    assigned_station_id = str(assigned_station_id)
-    if req_station_id != assigned_station_id:
-        return jsonify({'error': '이 조립대에 배정된 주문이 아닙니다', 'assigned_station_id': (assigned_station_id)}), 403
-    if r.get(f"{STATION_ORDER_PREFIX}{req_station_id}") != order_id:
-        return jsonify({'error': '이미 종료되었거나 이 조립대의 현재 주문이 아닙니다'}), 409
-
-    # 인증 가능한 지점은 arrived 하나뿐이다. STAGE_ORDER 순번으로 양쪽을 다 막는다.
-    #   앞  — AGV가 아직 조립대에 없다. 통과시키면 이동 중인 AGV에 하차 명령이 나간다.
-    #   뒤  — unclaimed·verified·received·completed. 특히 received에서 다시 찍으면
-    #         stage가 verified로 역행하고 AGV가 하차 명령을 두 번 받는다.
-    stage = order_data.get("stage")
-    if is_before(stage, "arrived"):
-        return jsonify({'error': '아직 부품이 도착하지 않았습니다', 'stage': stage}), 409
-    if is_after(stage, "arrived"):
-        return jsonify({'error': '이미 처리된 주문입니다', 'stage': stage}), 409
-
-    r.hset(STATION_KEY, assigned_station_id, "busy")   # 배정 때 이미 busy. 방어적 재확인
-    r.set(f"{STATION_VERIFIED_PREFIX}{assigned_station_id}", datetime.now(KST).isoformat())
-    set_stage(order_id, "verified")
-    _touch_order(order_id)
-    r.expire(f"{STATION_VERIFIED_PREFIX}{assigned_station_id}", ORDER_TTL)
-    # cnt_station은 배정 시점에만 올린다 — 여기서 push하면 같은 배정에 CIN이 하나 더 쌓인다
-
-    return jsonify({
-        'ok': True,
-        'order_id': order_id,
-        'station_id': assigned_station_id,
-        'board': order_data.get("board"),
-        'keycap': order_data.get("keycap"),
-        'colors': order_data.get("colors", "").split(",")
-    }), 200
+    payload, status = start_order(order_id, data.get("station_id", ""))
+    return jsonify(payload), status
 
 @bp.route('/station/<station_id>/complete', methods=['POST'])
 def station_complete(station_id):

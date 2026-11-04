@@ -19,6 +19,7 @@ from routes.dashboard import bp as dashboard_bp
 from routes.station import bp as station_bp
 from routes.callback import bp as callback_bp
 from routes.admin import bp as admin_bp
+from routes.calling import bp as calling_bp
 
 
 def _boot_background():
@@ -86,6 +87,7 @@ def create_app():
     app.register_blueprint(station_bp)
     app.register_blueprint(callback_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(calling_bp)
 
     _ensure_initial_state()
 
