@@ -163,11 +163,13 @@
 <script src="config.js"></script>
 <script>
 /* =====================================================================
-   설정 (API_BASE · ADMIN_PW 는 config.js — config.example.js 참고)
+   설정 (ADMIN_PW 는 config.js — config.example.js 참고)
    ===================================================================== */
 if (!window.APP_CONFIG) console.error('config.js 없음: config.example.js 를 복사해 만드세요');
 const CONFIG = {
   ...window.APP_CONFIG,
+  // API 서버 주소 — 프로토콜·포트 포함, 끝에 / 없이
+  API_BASE: 'http://192.168.0.100:5000',
   // id = GET /station/{station_id}/status 에 들어갈 값
   STATIONS: [
     { id: 1, name: '조립대 1' },
