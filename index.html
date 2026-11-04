@@ -160,17 +160,16 @@
   </div>
 </div>
 
-<script src="config.js"></script>
 <script>
 /* =====================================================================
-   설정 (ADMIN_PW 는 config.js — config.example.js 참고)
+   설정
    ===================================================================== */
-if (!window.APP_CONFIG) console.error('config.js 없음: config.example.js 를 복사해 만드세요');
 const CONFIG = {
-  ...window.APP_CONFIG,
   // API 서버 주소 — 프로토콜·포트 포함, 끝에 / 없이
   API_BASE: 'http://192.168.0.100:5000',
-  // id = GET /station/{station_id}/status 에 들어갈 값
+  // 관리자 비밀번호 — 숫자 12자리 이내 (로고 3초 안에 7번 클릭 시 팝업)
+  ADMIN_PW: '2026',
+  // id = /display/status 응답의 station_id
   STATIONS: [
     { id: 1, name: '조립대 1' },
     { id: 2, name: '조립대 2' },
@@ -187,56 +186,14 @@ const CONFIG = {
 
 /* =====================================================================
    API 연동
-   1) GET {API_BASE}/station/{station_id}/status
-        배정 있음 → { "order_id": "ord_a1b2c3d4", "order_seq": 12 }
-        배정 없음 → { "error": "이 조립대에 배정된 주문이 없습니다" }  (200·4xx 모두 '비어 있음'으로 처리, 실서버는 400)
-   2) GET {API_BASE}/order/{order_id}/status
-        성공 → { "order_id": "ord_a1b2c3d4", "position_in_queue": 2, "stage": "assigned", "station_id": 1 }
-        실패 → { "error": "존재하지 않는 주문입니다" }  → 슬롯 비움
-        이중 확인: order_id 가 1)과 같고 station_id 가 이 조립대인지 → 다르면 화면 갱신 안 함
-        stage  verified 전(assigned ~ arrived) → 호출 중
-               verified, received              → 조립 중
-               completed, unclaimed            → 슬롯 비움 (TERMINAL)
-        화면 번호는 1)의 order_seq 사용
-   3) GET {API_BASE}/queue/status
-        → { "orders": [ { "order_id": "...", "order_seq": 7, "position": 1, ... }, ... ], "queue_length": 2, ... }
-        orders 의 order_seq 를 대기 번호로 표시 (4)와 합침)
-   4) GET {API_BASE}/station/{station_id}/status/debug   (조립대마다)
-        → order_seq 만 읽어 '대기 중' 목록에 넣음
-          { "order_seq": 7 } · { "order_seqs": [7, 8] } · { "orders": [ { "order_seq": 7 }, ... ] } · [7, 8] 모두 처리
-        3) + 4) 를 합쳐 중복 제거
-        같은 order_seq 가 1)에서 호출 칸에 뜨면(호출 중·조립 중) 대기 목록에서 빼고 호출 칸에만 표시
-        completed 확인된 번호도 대기 목록에 다시 넣지 않음
-        대기 번호는 order_seq 오름차순
+   GET {API_BASE}/display/status
+     → { "stations": [ { "station_id": 1, "order_seq": 12, "status": "calling" }, ... ], "waiting": [13, 14] }
+     status  calling    → 호출 중
+             assembling → 조립 중
+             idle       → 슬롯 비움 (order_seq 는 null)
+     어떤 번호를 어디에 띄울지는 서버가 정한다. 화면은 응답을 그대로 그린다.
+     조회 실패·형식 오류면 직전 화면 유지
    ===================================================================== */
-
-/* 조립대 응답 { "order_id", "order_seq" } → { no: order_seq, orderId: order_id }
-   둘 중 하나라도 없으면 배정 없음으로 봄 */
-function parseStation(data) {
-  if (!data || typeof data !== 'object' || data.error != null) return null;   // 배정된 주문 없음
-  const no = data.order_seq, orderId = data.order_id;
-  return no == null || no === '' || orderId == null || orderId === '' ? null : { no, orderId };
-}
-
-/* 주문 응답에서 stage / order_id / station_id 꺼내기 */
-function parseOrder(data) {
-  const o = data && typeof data === 'object' ? data : {};
-  return { stage: String(o.stage ?? '').trim().toLowerCase(), orderId: o.order_id, stationId: o.station_id };
-}
-
-/* stage → 화면 상태. 'calling' | 'assembling' | null(슬롯 비움)
-   표에 없는 stage면 BadStage 를 던져 직전 화면 유지 */
-const CALLING_STAGES    = ['queued', 'assigned', 'keycap_mismatched', 'keycap_dispensed', 'keycap_reached', 'keycap_packed',
-                           'tray_reached', 'board_mismatched', 'board_packed', 'pickup_reached', 'loaded', 'arrived'];
-const ASSEMBLING_STAGES = ['verified', 'received'];
-const DONE_STAGES       = ['completed', 'unclaimed'];
-class BadStage extends Error {}
-function stageToStatus(stage) {
-  if (DONE_STAGES.includes(stage)) return null;
-  if (ASSEMBLING_STAGES.includes(stage)) return 'assembling';
-  if (CALLING_STAGES.includes(stage)) return 'calling';
-  throw new BadStage(`알 수 없는 stage: "${stage}"`);
-}
 
 /* 번호 비교 (숫자 38 과 문자열 "038" 도 같은 번호로 봄) */
 function sameSeq(a, b) {
@@ -245,63 +202,15 @@ function sameSeq(a, b) {
   return Number.isFinite(na) && Number.isFinite(nb) ? na === nb : String(a).trim() === String(b).trim();
 }
 
-/* 이중 확인 실패: 주문 조회 결과가 이 조립대의 주문이 아님 */
-class SeqMismatch extends Error {}
-
-/* 대기열 응답 → [order_seq, ...] (position 순)
-   orders 가 배열이 아니면 형식 오류로 보고 예외 → 직전 목록 유지 */
-function parseQueue(data) {
-  const orders = data && typeof data === 'object' ? data.orders : null;
-  if (!Array.isArray(orders)) throw new Error('/queue/status: orders 배열 없음');
-  return orders
-    .filter(o => o && o.order_seq != null && o.order_seq !== '')
-    .map((o, i) => ({ seq: o.order_seq, pos: Number.isFinite(Number(o.position)) ? Number(o.position) : Infinity, i }))
-    .sort((a, b) => a.pos - b.pos || a.i - b.i)
-    .map(o => o.seq);
-}
-
-async function fetchQueue() {
-  return parseQueue(await getJSON('/queue/status'));
-}
-
-/* debug 응답 → [order_seq, ...]  (order_seq 만 읽음)
-   형식을 알 수 없으면 예외 → 그 조립대의 직전 대기 번호 유지 */
-function parseDebug(data) {
-  const ok = v => v != null && v !== '';
-  const fromList = list => list.map(o => (o && typeof o === 'object') ? o.order_seq : o).filter(ok);
-  if (Array.isArray(data)) return fromList(data);
-  if (!data || typeof data !== 'object') throw new Error('status/debug: 응답 형식 오류');
-  if (data.error != null) return [];                               // 배정 대상 없음
-  if (Array.isArray(data.order_seqs)) return fromList(data.order_seqs);
-  if (Array.isArray(data.orders)) return fromList(data.orders);
-  if ('order_seq' in data) return ok(data.order_seq) ? [data.order_seq] : [];
-  throw new Error('status/debug: order_seq 없음');
-}
-
-/* 조립대 하나의 대기 번호 조회 */
-async function fetchDebug(st) {
-  try { return parseDebug(await getJSON(`/station/${encodeURIComponent(st.id)}/status/debug`)); }
-  catch (e) {
-    // 4xx + { "error": ... } = 대기 번호 없음 → 정상
-    if (e.status >= 400 && e.status < 500 && e.data && typeof e.data === 'object' && e.data.error != null) return [];
-    throw e;
-  }
-}
-
-/* 대기열 번호 + 조립대별 대기 번호 → 하나의 대기 목록
-   호출 칸에 떠 있는 번호와 completed 확인된 번호는 빼고, 중복 제거 후 오름차순 */
-function buildWaiting(perStation, calls) {
-  const shown = [...calls.filter(Boolean).map(c => c.no), ...doneNo.filter(n => n != null)];
-  const out = [];
-  perStation.flat().forEach(n => {
-    if (shown.some(x => sameSeq(x, n))) return;
-    if (out.some(x => sameSeq(x, n))) return;
-    out.push(n);
+/* 응답 → { calls: [{ no, status } | null, ...], waiting: [번호, ...] }  (calls 는 CONFIG.STATIONS 순서)
+   형식을 알 수 없으면 예외 → 직전 화면 유지 */
+function parseDisplay(data) {
+  if (!data || !Array.isArray(data.stations) || !Array.isArray(data.waiting)) throw new Error('/display/status: 응답 형식 오류');
+  const calls = CONFIG.STATIONS.map(st => {
+    const s = data.stations.find(x => x && sameSeq(x.station_id, st.id));
+    return !s || s.status === 'idle' || s.order_seq == null ? null : { no: s.order_seq, status: s.status };
   });
-  return out.sort((a, b) => {
-    const na = Number(a), nb = Number(b);
-    return Number.isFinite(na) && Number.isFinite(nb) ? na - nb : String(a).localeCompare(String(b));
-  });
+  return { calls, waiting: data.waiting };
 }
 
 async function getJSON(path) {
@@ -311,92 +220,25 @@ async function getJSON(path) {
     const res = await fetch(CONFIG.API_BASE + path, { cache: 'no-store', signal: ctrl.signal, headers: { 'ngrok-skip-browser-warning': 'true' } });
     const txt = (await res.text()).trim();
     let data; try { data = JSON.parse(txt); } catch { data = txt; }
-    if (!res.ok) { const e = new Error(`${path} → ${res.status}`); e.status = res.status; e.data = data; throw e; }
+    if (!res.ok) throw new Error(`${path} → ${res.status}`);
     return data;
   } finally { clearTimeout(timer); }
 }
 
-/* 주문 stage 조회 → 'calling' | 'assembling' | null(completed)
-   조회 실패·이중 확인 실패·표에 없는 stage면 예외 */
-async function fetchOrderStatus(st, cur) {
-  const data = await getJSON(`/order/${encodeURIComponent(cur.orderId)}/status`);
-  if (data && typeof data === 'object' && data.error != null) throw new SeqMismatch(`주문 ${cur.orderId}: ${data.error}`);
-  const order = parseOrder(data);
-  if (String(order.orderId) !== String(cur.orderId))
-    throw new SeqMismatch(`조립대 ${st.id}: 주문 ${cur.orderId} 조회했는데 ${order.orderId} 응답`);
-  if (order.stationId != null && !sameSeq(order.stationId, st.id))
-    throw new SeqMismatch(`조립대 ${st.id}: 주문 ${cur.orderId} 은 조립대 ${order.stationId} 소속`);
-  return stageToStatus(order.stage);
-}
-
-/* 조립대 하나의 화면 상태 → { value: { no, status } | null, err? }
-   1) 호출 번호가 뜨면 바로 '호출 중'
-   2) 주문 stage가 verified / received 면 '조립 중'
-   3) completed 면 '대기'(빈 칸)
-   4) 조립 중이어도 호출 번호는 계속 조회 → 번호가 바뀌면 이전 번호는 끝난 것으로 보고 새 번호 바로 호출
-      (번호 비교·차임은 QueueBoard.update 에서 처리)
-   조립대 조회 자체가 실패하면 예외 → 직전 화면 유지 */
-const doneNo = CONFIG.STATIONS.map(() => null);     // 조립대별로 completed 확인된 번호
-async function fetchStation(st, i) {
-  let raw;
-  try { raw = await getJSON(`/station/${encodeURIComponent(st.id)}/status`); }
-  catch (e) {
-    // 4xx(서버는 400) + { "error": ... } = 배정된 주문 없음 → 정상적인 '대기'
-    if (e.status >= 400 && e.status < 500 && e.data && typeof e.data === 'object' && e.data.error != null) {
-      if (e.status !== 404 && e.status !== 400) console.warn(`조립대 ${st.id}:`, e.status, e.data.error);
-      return { value: null };
-    }
-    throw e;                                         // 그 외(500, 네트워크 등)는 조회 실패
-  }
-  const cur = parseStation(raw);
-  if (!cur) return { value: null };
-
-  let status;
-  try { status = await fetchOrderStatus(st, cur); }
-  catch (err) {
-    // 주문 조회가 안 돼도 번호는 띄움:
-    //  이미 completed 확인한 번호 → 계속 '대기' / 같은 번호 → 직전 상태 유지 / 새 번호 → '호출 중'
-    const prev = state.calls[i];
-    const fallback = sameSeq(doneNo[i], cur.no) ? null
-      : prev && sameSeq(prev.no, cur.no) ? prev.status : 'calling';
-    return { value: fallback ? { no: cur.no, status: fallback } : null, err };
-  }
-  if (status === null) { doneNo[i] = cur.no; return { value: null }; }   // completed → '대기'
-  return { value: { no: cur.no, status } };          // 화면 번호는 조립대 응답의 order_seq
-}
-
 let failStreak = 0;                                  // 연속 실패 횟수
-const seen = CONFIG.STATIONS.map(() => false);       // 조립대별 첫 조회 성공 여부
-const debugSeqs = CONFIG.STATIONS.map(() => []);      // 조립대별 직전 대기 번호 (debug 조회 실패 시 유지)
-let queueSeqs = [];                                    // 직전 대기열 번호 (/queue/status 조회 실패 시 유지)
+let firstLoad = true;
 async function poll() {
   try {
-    const [[queue], results, debugs] = await Promise.all([
-      Promise.allSettled([fetchQueue()]),
-      Promise.allSettled(CONFIG.STATIONS.map(fetchStation)),
-      Promise.allSettled(CONFIG.STATIONS.map(fetchDebug)),
-    ]);
-    const errs = [queue, ...results, ...debugs].map(r => r.status === 'rejected' ? r.reason : r.value && r.value.err).filter(Boolean);
-    errs.forEach(e => console.warn('poll failed', e));
-    // 번호 불일치·이상한 stage는 통신 문제가 아니므로 '연결 끊김' 표시는 네트워크/서버 오류일 때만
-    const ok = errs.every(e => e instanceof SeqMismatch || e instanceof BadStage);
-    failStreak = ok ? 0 : failStreak + 1;
-    QueueBoard.setOnline(failStreak < CONFIG.OFFLINE_AFTER);   // 한두 번 실패로는 표시 안 함
-    // 조회 실패·번호 불일치인 조립대는 직전 화면 유지 (다음 조회에서 다시 확인)
-    const calls = results.map((r, i) => {
-      if (r.status !== 'fulfilled') return state.calls[i];
-      const v = r.value.value;
-      // 처음 켰을 때 이미 떠 있던 호출은 새 호출이 아니므로 차임·깜빡임 없이 표시
-      if (!seen[i]) { seen[i] = true; if (v) return { ...v, silent: true }; }
-      return v;
-    });
-    // 대기 번호: /queue/status + 조립대별 debug. 조회 실패한 쪽은 직전 번호 유지, 호출 칸에 뜬 번호는 제외
-    if (queue.status === 'fulfilled') queueSeqs = queue.value;
-    debugs.forEach((r, i) => { if (r.status === 'fulfilled') debugSeqs[i] = r.value; });
-    const waiting = buildWaiting([queueSeqs, ...debugSeqs], calls);
-    QueueBoard.update({ calls, waiting });
+    const { calls, waiting } = parseDisplay(await getJSON('/display/status'));
+    failStreak = 0;
+    QueueBoard.setOnline(true);
+    // 처음 켰을 때 이미 떠 있던 호출은 새 호출이 아니므로 차임·깜빡임 없이 표시
+    QueueBoard.update({ calls: firstLoad ? calls.map(c => c && { ...c, silent: true }) : calls, waiting });
+    firstLoad = false;
   } catch (e) {
-    console.error('poll error', e);              // 화면 갱신 중 예외가 나도
+    console.warn('poll failed', e);
+    failStreak++;
+    QueueBoard.setOnline(failStreak < CONFIG.OFFLINE_AFTER);   // 한두 번 실패로는 표시 안 함
   } finally {
     setTimeout(poll, CONFIG.POLL_MS);            // 폴링은 계속
   }

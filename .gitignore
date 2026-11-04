@@ -9,10 +9,6 @@ __pycache__
 .DS_Store
 services/.DS_Store
 
-#calling app 설정 (config.example.js 참고)
-/config.js
-
-
 #front
 # Miscellaneous
 *.class
