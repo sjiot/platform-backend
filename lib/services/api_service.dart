@@ -24,8 +24,7 @@ class ApiService {
   // 바뀔 수도 있습니다 — 이전처럼 "서버가 안 떠서 안 되는" 상황이 다시
   // 생기면, 먼저 팀장님께 로컬 서버/ngrok이 켜져 있는지, 주소가 그대로인지
   // 확인하는 게 우선입니다.
-  static const String baseUrl =
-      'https://charry-erminia-revelational.ngrok-free.dev';
+  static const String baseUrl = 'https://192.168.0.100';
 
   // [신규] ngrok 무료 플랜은 브라우저가 아닌 요청(우리 앱 같은)에도 기본적으로
   // "방문 경고" HTML 페이지를 끼워 보냅니다. 이 헤더를 안 보내면 서버가 내려준
