@@ -2,6 +2,7 @@ import uuid
 import json
 from datetime import datetime
 import io
+from functools import wraps
 import qrcode
 from flask import Blueprint, jsonify, request, send_file
 
@@ -25,8 +26,24 @@ from infra.keys import (_order_counter_key,
 from services.order_service import _is_valid_mbti
 from services.dispatch import try_assign_next
 from services.line import require_open, is_open as line_is_open
+from services.process import active_order_ids
 
 bp = Blueprint('order', __name__)
+
+
+def require_no_fault(view):
+    """진행 중 주문에 fault 가 있으면 해제될 때까지 POST /order 를 받지 않는다.
+
+    Idempotency-Key 를 잡기 전에 걸러야 한다. 라우트 함수 안에서 거르면 키가 processing 으로
+    남아, fault 를 해제한 뒤 같은 키로 재시도해도 5분 동안 409 를 받는다.
+    """
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if any(r.hget(f"order:{oid}", "fault") for oid in active_order_ids()):
+            return jsonify({'error': '설비 점검 중입니다. 잠시 후 다시 시도해주세요', 'fault': True}), 409
+        return view(*args, **kwargs)
+    return wrapper
+
 
 @bp.route('/queue/status', methods=['GET'])
 def queue_status():
@@ -95,6 +112,7 @@ def queue_status():
 
 @bp.route('/order', methods=['POST'])
 @require_open
+@require_no_fault
 def post_order_list():
     """
     키캡 주문 생성
@@ -125,7 +143,7 @@ def post_order_list():
       400:
         description: 요청 값 오류
       409:
-        description: 대기열 초과 (재시도 필요)
+        description: 대기열 초과 또는 진행 중 주문의 fault 로 접수 중단 (재시도 필요). fault 면 응답 body 에 "fault" = true
       503:
         description: 주문 접수 마감 (영업 상태 closed). 응답 body 에 "line" = "closed"
     """
