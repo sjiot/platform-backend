@@ -33,7 +33,7 @@ class ApiException implements Exception {
 /// - 걸린 시간(ms)과 응답 본문을 한 줄로 출력한다.
 /// - 응답이 JSON이 아니면(Cloud Run 502 HTML 등) 경고로 출력한다.
 class ApiService {
-  final String baseUrl = 'https://192.168.0.100';
+  final String baseUrl = 'http://192.168.0.100:5000';
 
   static const Duration timeout = Duration(seconds: 5);
 
