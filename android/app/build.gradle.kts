@@ -58,3 +58,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 원격 업데이트: APK를 설치 화면에 넘기는 FileProvider
+    implementation("androidx.core:core:1.13.1")
+}

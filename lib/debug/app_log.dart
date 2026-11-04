@@ -10,6 +10,7 @@ class LogTag {
   static const String screen = 'SCREEN'; // 각 화면 내부 동작
   static const String kiosk = 'KIOSK'; // 화면 고정
   static const String demo = 'DEMO'; // 테스트 메뉴로 강제 이동
+  static const String update = 'UPDATE'; // 원격 업데이트 확인 · 다운로드 · 설치
   static const String error = 'ERROR'; // 처리되지 않은 예외
 }
 

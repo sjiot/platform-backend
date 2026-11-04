@@ -7,9 +7,13 @@ import '../theme/app_colors.dart';
 const String kExitPassword = '202611';
 
 /// 상단 왼쪽 로고를 2초 안에 7번 눌렀을 때 뜨는 숫자 비밀번호 입력창.
+/// 업데이트 설치 전 관리자 확인에도 같은 창을 쓴다. ([title]만 바꿔서)
 /// 비밀번호가 맞으면 true를 돌려주고, 그 외에는 false/null.
 class ExitPasswordDialog extends StatefulWidget {
-  const ExitPasswordDialog({super.key});
+  /// 창 맨 위 작은 제목 (용도 표시)
+  final String title;
+
+  const ExitPasswordDialog({super.key, this.title = '관 리 자 종 료'});
 
   @override
   State<ExitPasswordDialog> createState() => _ExitPasswordDialogState();
@@ -68,9 +72,9 @@ class _ExitPasswordDialogState extends State<ExitPasswordDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                '관 리 자 종 료',
-                style: TextStyle(
+              Text(
+                widget.title,
+                style: const TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w900,
                   color: AppColors.textSub,

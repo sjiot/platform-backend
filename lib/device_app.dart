@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show File;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -19,10 +20,12 @@ import 'screens/workstation_setup_screen.dart';
 import 'screens/wrong_workstation_screen.dart';
 import 'services/api_service.dart';
 import 'services/kiosk_service.dart';
+import 'services/update_service.dart';
 import 'theme/app_colors.dart';
 import 'widgets/app_top_bar.dart';
 import 'widgets/exit_password_dialog.dart';
 import 'widgets/screen_canvas.dart';
+import 'widgets/update_badge.dart';
 import 'widgets/workstation_header.dart';
 
 class DeviceApp extends StatelessWidget {
@@ -130,6 +133,15 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
   // 관리자 종료 중에는 화면 고정을 다시 걸지 않는다.
   bool _isExiting = false;
 
+  // 원격 업데이트
+  //
+  // 새 빌드를 백그라운드로 받아 두고, 한가할 때 업데이트 버튼을 띄운다.
+  Timer? _updateCheckTimer;
+  bool _isCheckingUpdate = false;
+  bool _isInstallingUpdate = false;
+  UpdateInfo? _readyUpdate; // 받아 두고 설치를 기다리는 빌드
+  File? _readyUpdateFile;
+
   // 주기
   @override
   void initState() {
@@ -140,6 +152,8 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       KioskService.start();
     });
+
+    _startUpdateChecks();
   }
 
   /// 사용자가 고정을 풀고 나갔다가 돌아온 경우 다시 고정한다.
@@ -158,6 +172,7 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
 
     _stationStatusTimer?.cancel();
     _stopCallTimers();
+    _updateCheckTimer?.cancel();
 
     super.dispose();
   }
@@ -772,6 +787,154 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
     }
   }
 
+  // 6. 원격 업데이트
+
+  /// 주문을 처리하지 않는 한가한 상태. 이때만 업데이트 버튼을 보이고 설치한다.
+  bool get _isIdle =>
+      _currentStep == DeviceStep.workstationSetup ||
+      (_currentStep == DeviceStep.orderCall &&
+          _calledOrderId == null &&
+          !_isQrScannerOpen &&
+          !_isStarting &&
+          !_isHandlingNoShow);
+
+  void _startUpdateChecks() {
+    if (!UpdateService.enabled) {
+      AppLog.d(LogTag.update, '원격 업데이트 꺼짐 (CI 빌드가 아님)');
+      return;
+    }
+
+    AppLog.i(
+      LogTag.update,
+      '현재 빌드 ${UpdateService.currentBuild}, '
+      '${UpdateService.checkInterval.inMinutes}분마다 새 버전 확인',
+    );
+
+    // 켜지자마자는 네트워크가 늦게 붙는 경우가 있어 조금 뒤에 첫 확인
+    Future.delayed(const Duration(seconds: 10), _checkForUpdate);
+
+    _updateCheckTimer = Timer.periodic(
+      UpdateService.checkInterval,
+      (_) => _checkForUpdate(),
+    );
+  }
+
+  /// 새 빌드가 있으면 백그라운드로 받아 두고 업데이트 버튼을 띄운다.
+  Future<void> _checkForUpdate() async {
+    if (!mounted || _isCheckingUpdate || _isInstallingUpdate) return;
+
+    _isCheckingUpdate = true;
+
+    try {
+      final UpdateInfo? info = await UpdateService.fetchNewer();
+
+      if (!mounted) return;
+
+      if (info == null) {
+        AppLog.d(LogTag.update, '최신 빌드 사용 중 (${UpdateService.currentBuild})');
+
+        if (_readyUpdate != null) {
+          setState(() {
+            _readyUpdate = null;
+            _readyUpdateFile = null;
+          });
+        }
+
+        await UpdateService.clearDownloads();
+        return;
+      }
+
+      // 같은 빌드를 이미 받아 둔 경우
+      if (_readyUpdate?.buildNumber == info.buildNumber &&
+          (await _readyUpdateFile?.exists() ?? false)) {
+        return;
+      }
+
+      AppLog.i(LogTag.update, '새 빌드 발견: ${info.label} → 백그라운드 다운로드');
+
+      // 더 새 빌드가 올라왔으면 이전 빌드 버튼은 내린다.
+      if (_readyUpdate != null) {
+        setState(() {
+          _readyUpdate = null;
+          _readyUpdateFile = null;
+        });
+      }
+
+      final File file = await UpdateService.download(info);
+
+      if (!mounted) return;
+
+      setState(() {
+        _readyUpdate = info;
+        _readyUpdateFile = file;
+      });
+    } catch (e) {
+      AppLog.w(LogTag.update, '업데이트 확인 · 다운로드 실패, 다음 주기에 재시도: $e');
+    } finally {
+      _isCheckingUpdate = false;
+    }
+  }
+
+  /// 업데이트 버튼 → 관리자 비밀번호 → 안드로이드 설치 화면
+  Future<void> _handleUpdateTap() async {
+    final UpdateInfo? info = _readyUpdate;
+    final File? file = _readyUpdateFile;
+
+    if (info == null || file == null || _isInstallingUpdate) return;
+
+    if (!_isIdle) {
+      _showMessage('진행 중인 주문이 끝난 뒤 업데이트할 수 있습니다.');
+      return;
+    }
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      // 바깥을 눌러도 닫히지 않는다. [취소] 또는 비밀번호 통과로만 닫힘.
+      barrierDismissible: false,
+      builder: (_) => const ExitPasswordDialog(title: '업 데 이 트'),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // 비밀번호를 입력하는 사이 주문이 호출된 경우
+    if (!_isIdle) {
+      _showMessage('주문이 호출되어 업데이트를 미뤘습니다.');
+      return;
+    }
+
+    if (!await file.exists()) {
+      AppLog.w(LogTag.update, '받아 둔 APK가 사라짐 → 다시 받기');
+
+      setState(() {
+        _readyUpdate = null;
+        _readyUpdateFile = null;
+      });
+
+      _showMessage('업데이트 파일을 다시 받는 중입니다. 잠시 후 다시 시도해 주세요.');
+
+      _checkForUpdate();
+      return;
+    }
+
+    _isInstallingUpdate = true;
+
+    AppLog.i(
+      LogTag.update,
+      '업데이트 설치 시작: ${UpdateService.currentBuild} → ${info.label}',
+    );
+
+    try {
+      // 네이티브에서 화면 고정을 풀고 설치 화면을 연다.
+      await UpdateService.install(file);
+    } catch (e) {
+      AppLog.w(LogTag.update, '설치 화면 열기 실패: $e');
+
+      _showMessage('업데이트 설치 화면을 열지 못했습니다.');
+    } finally {
+      _isInstallingUpdate = false;
+    }
+  }
+
   // 화면 상태 관리
 
   /// 화면 전환은 모두 이 함수를 거친다.
@@ -1026,6 +1189,17 @@ class _DeviceRootState extends State<DeviceRoot> with WidgetsBindingObserver {
                       child: WorkstationHeader(
                         workstationNumber: _workstationNumber!,
                         statusColor: _headerStatusColor(_currentStep),
+                      ),
+                    ),
+
+                  /// 새 버전을 받아 뒀고 한가할 때만 보이는 업데이트 버튼
+                  if (_readyUpdate != null && _isIdle)
+                    Positioned(
+                      top: 20,
+                      right: 40,
+                      child: UpdateBadge(
+                        versionLabel: _readyUpdate!.label,
+                        onTap: _handleUpdateTap,
                       ),
                     ),
 
