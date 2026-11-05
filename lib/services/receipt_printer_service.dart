@@ -15,10 +15,15 @@ class ReceiptPrinterService {
   // 로 두면 프린터는 PDF 페이지 끝(= 내용 끝)에서 자릅니다.
   static const double _receiptHeightMm = 135;
 
+  // 좌/우/아래 여백. 위쪽 여백은 따로 두지 않습니다(_fitToPrinter 참고).
+  static const double _sideMargin = 4 * PdfPageFormat.mm;
+
   static final PdfPageFormat _receiptFormat = PdfPageFormat(
     72 * PdfPageFormat.mm,
     _receiptHeightMm * PdfPageFormat.mm,
-    marginAll: 4 * PdfPageFormat.mm,
+    marginLeft: _sideMargin,
+    marginRight: _sideMargin,
+    marginBottom: _sideMargin,
   );
 
   /// [프린터 점검용] 마지막 출력 때 프린터가 알려준 정보(이름/사용 가능 여부/
@@ -35,7 +40,21 @@ class ReceiptPrinterService {
         (reported.width >= 40 * mm && reported.width <= 90 * mm)
             ? reported.width
             : _receiptFormat.width;
-    return PdfPageFormat(width, _receiptHeightMm * mm, marginAll: 4 * mm);
+    // [수정] 위쪽 여백은 PDF 에서 따로 주지 않습니다. 종이 맨 위에는 어차피
+    // 프린터 구조(헤드~커터 거리)로 생기는 빈 부분이 있어서, 여기에 4mm 를
+    // 더하면 그만큼 더 비어 보입니다. 드라이버가 "위쪽 N mm 는 인쇄 불가"
+    // 라고 알려주는 경우에만 그만큼(최대 4mm) 띄워 글자가 잘리지 않게 합니다.
+    final top = reported.marginTop.isFinite
+        ? reported.marginTop.clamp(0.0, _sideMargin).toDouble()
+        : 0.0;
+    return PdfPageFormat(
+      width,
+      _receiptHeightMm * mm,
+      marginTop: top,
+      marginLeft: _sideMargin,
+      marginRight: _sideMargin,
+      marginBottom: _sideMargin,
+    );
   }
 
   /// 프린터 이름이 우리가 찾는 영수증 프린터(SLK-TS100/SEWOO)인지 확인합니다.
@@ -131,7 +150,8 @@ class ReceiptPrinterService {
         ? '용지: 프린터가 알려주지 않음'
         : '용지: ${(rf.width / mmUnit).toStringAsFixed(1)}×'
             '${(rf.height / mmUnit).toStringAsFixed(1)}mm '
-            '(여백 좌${(rf.marginLeft / mmUnit).toStringAsFixed(1)} '
+            '(여백 상${(rf.marginTop / mmUnit).toStringAsFixed(1)} '
+            '좌${(rf.marginLeft / mmUnit).toStringAsFixed(1)} '
             '우${(rf.marginRight / mmUnit).toStringAsFixed(1)})';
     lastPrintInfo =
         '프린터: ${targetPrinter.name} (사용가능: ${targetPrinter.isAvailable})\n'
