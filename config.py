@@ -81,8 +81,8 @@ ORDER_COUNTER_TTL = int(os.getenv("ORDER_COUNTER_TTL", str(90 * 24 * 3600)))   #
 
 # 1칸의 최대 수량. /admin/reset?mode=zero 가 이 값으로 채운다.
 # 키캡 카트리지와 보드 보관대는 물리적으로 용량이 달라서 따로 둔다.
-KEYCAP_STOCK_MAX_COUNT = int(os.getenv("KEYCAP_STOCK_MAX_COUNT", "40"))   # 키캡 32칸
-BOARD_STOCK_MAX_COUNT = int(os.getenv("BOARD_STOCK_MAX_COUNT", "3"))      # 보드 4칸
+KEYCAP_STOCK_MAX_COUNT = int(os.getenv("KEYCAP_STOCK_MAX_COUNT", "30"))   # 키캡 32칸
+BOARD_STOCK_MAX_COUNT = int(os.getenv("BOARD_STOCK_MAX_COUNT", "20"))      # 보드 4칸
 
 # 노쇼 폐기 마감. unclaimed 로 끝난 트레이를 AGV가 discarded 로 보고할 때까지
 # 조립대를 잡아 둔다 — 그래야 폐기 명령이 cnt_process 에서 사라지지 않는다.
