@@ -244,28 +244,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _FadeSlide(
               opacity: _tileOpacity[0],
               y: _tileY[0],
-              child: const _LogoTile(color: KeycapColors.green, label: 'K'),
+              child: const _LogoTile(color: KeycapColors.green, label: 'M'),
             ),
-            const SizedBox(width: 20),
+            const SizedBox(width: _LogoTile.gap),
             _FadeSlide(
               opacity: _tileOpacity[1],
               y: _tileY[1],
-              child: const _LogoTile(color: KeycapColors.yellow, label: 'E'),
+              child: const _LogoTile(color: KeycapColors.yellow, label: 'B'),
             ),
-            const SizedBox(width: 20),
+            const SizedBox(width: _LogoTile.gap),
             _FadeSlide(
               opacity: _tileOpacity[2],
               y: _tileY[2],
-              child: const _LogoTile(color: KeycapColors.blue, label: 'Y'),
+              child: const _LogoTile(color: KeycapColors.blue, label: 'T'),
             ),
-            const SizedBox(width: 20),
+            const SizedBox(width: _LogoTile.gap),
             _FadeSlide(
               opacity: _tileOpacity[3],
               y: _tileY[3],
-              child: const _LogoTile(
-                color: KeycapColors.red,
-                icon: Icons.auto_awesome,
-              ),
+              child: const _LogoTile(color: KeycapColors.red, label: 'I'),
             ),
           ],
         ),
@@ -356,40 +353,30 @@ class _FadeSlide extends StatelessWidget {
 }
 
 /// [디자인] 시안의 입체 키캡을 그대로 쓴 로고 타일.
+///
+/// 크기는 시안 원본(116 x 130, 글자 40, 간격 20)에 [scale]을 곱해서 정합니다.
+/// 타일·글자·간격이 모두 같은 배율로 커지므로 비율은 시안과 동일하게 유지됩니다.
 class _LogoTile extends StatelessWidget {
+  static const double scale = 1.3;
+
+  static const double width = 116 * scale;
+  static const double height = 130 * scale;
+  static const double fontSize = 40 * scale;
+  static const double fontSizeMulti = 26 * scale; // 두 글자 이상일 때
+  static const double gap = 20 * scale;
+
   final Color color;
-  final String? label;
-  final IconData? icon;
-  const _LogoTile({required this.color, this.label, this.icon});
+  final String label;
+  const _LogoTile({required this.color, required this.label});
 
   @override
   Widget build(BuildContext context) {
-    if (icon != null) {
-      return SizedBox(
-        width: 116,
-        height: 130,
-        child: Stack(
-          children: [
-            Keycap(
-              color: color,
-              letter: '',
-              width: 116,
-              height: 130,
-            ),
-            Center(
-              child: Icon(icon, color: AppColors.ink, size: 40),
-            ),
-          ],
-        ),
-      );
-    }
-
     return Keycap(
       color: color,
-      letter: label ?? '',
-      width: 116,
-      height: 130,
-      fontSize: label != null && label!.length > 1 ? 26 : 40,
+      letter: label,
+      width: width,
+      height: height,
+      fontSize: label.length > 1 ? fontSizeMulti : fontSize,
     );
   }
 }
