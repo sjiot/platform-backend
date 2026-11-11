@@ -34,6 +34,9 @@ class _ConveyorBeltState extends State<ConveyorBelt>
   /// 키캡 한 개가 벨트를 완전히 통과하는 시간
   static const Duration _cycle = Duration(milliseconds: 4400);
 
+  /// 키캡 층 높이, 벨트 높이(24 + 11), 키캡이 벨트 위로 내려앉는 깊이
+  static const double _capsHeight = 96, _beltHeight = 35, _capsDrop = 22;
+
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: _cycle,
@@ -56,38 +59,52 @@ class _ConveyorBeltState extends State<ConveyorBelt>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Transform.translate(
-              offset: const Offset(0, 4),
-              child: SizedBox(
-                height: 96,
-                child: ClipRect(
-                  child: CustomPaint(
-                    size: Size.infinite,
-                    painter: _CapsPainter(
-                      t: t,
-                      letters: widget.letters,
-                      colors: widget.colors,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+            // 벨트를 먼저 그리고 키캡을 그 위에 올려야 키캡이 벨트 앞에 보입니다.
+            SizedBox(
+              height: _capsHeight + _beltHeight,
+              child: Stack(
                 children: [
-                  Container(
-                    height: 24,
-                    color: AppColors.border,
-                    child: CustomPaint(
-                      size: Size.infinite,
-                      // 스트라이프는 1초 주기로 흐릅니다.
-                      painter: _BeltPainter((t * 4.4) % 1.0),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            height: 24,
+                            color: AppColors.border,
+                            child: CustomPaint(
+                              size: Size.infinite,
+                              // 스트라이프는 1초 주기로 흐릅니다.
+                              painter: _BeltPainter((t * 4.4) % 1.0),
+                            ),
+                          ),
+                          Container(height: 11, color: AppColors.boardEdge),
+                        ],
+                      ),
                     ),
                   ),
-                  Container(height: 11, color: AppColors.boardEdge),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: _capsDrop,
+                    height: _capsHeight,
+                    child: ClipRect(
+                      child: CustomPaint(
+                        size: Size.infinite,
+                        painter: _CapsPainter(
+                          t: t,
+                          letters: widget.letters,
+                          colors: widget.colors,
+                          // 키캡의 가장 아래 꼭짓점이 층 바닥에 닿는 값입니다.
+                          baseY: _capsHeight - 16,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -132,11 +149,15 @@ class _CapsPainter extends CustomPainter {
     required this.t,
     required this.letters,
     required this.colors,
+    required this.baseY,
   });
 
   final double t;
   final List<String> letters;
   final List<Color> colors;
+
+  /// 키캡 밑면 중심의 y 좌표
+  final double baseY;
 
   static const double capBase = 52, capH = 40, inset = 7;
 
@@ -257,8 +278,6 @@ class _CapsPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final travel = size.width + 120;
-    // 키캡의 가장 아래 꼭짓점이 벨트 윗면에 정확히 닿는 값입니다.
-    final baseY = size.height - 16; // 컨베이어벨트와의 간격 수정.
 
     for (var i = 0; i < 4; i++) {
       final phase = (t + i * 0.25) % 1.0;
@@ -273,7 +292,7 @@ class _CapsPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_CapsPainter old) => old.t != t;
+  bool shouldRepaint(_CapsPainter old) => old.t != t || old.baseY != baseY;
 }
 
 /// 글자가 한 글자씩 튀는 문구
