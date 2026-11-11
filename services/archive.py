@@ -47,7 +47,14 @@ def finish_order(order_id, final_stage, reason=None):
         logger.warning(f"[finish] {order_id} 주문 없음 — 건너뜀")
         return None
 
-    from services.process import set_stage          # 순환 import 회피
+    from services.process import set_stage, TERMINAL          # 순환 import 회피
+
+    if od.get("stage") in TERMINAL:
+        # 끝난 주문을 다시 끝내지 않는다. 특히 unclaimed 는 AGV 폐기 보고까지 조립대를 잡고 있는데
+        # (_release_resources), 여기로 completed 가 들어오면 그 조립대가 폐기 전에 풀린다.
+        # 조립대 완료 버튼·조립 타임아웃이 그 경로다 (routes/station.py, station_service._complete_station).
+        logger.warning(f"[finish] {order_id} 이미 {od.get('stage')} — {final_stage} 요청 무시")
+        return None
 
     if reason:
         r.hset(key, "reason", reason)
@@ -139,12 +146,21 @@ def release_station_after_discard(order_id):
 
     callbacks/agv.py 의 discarded 분기와 워치독의 폐기 마감, 두 곳에서 부른다.
     어느 쪽이 먼저 와도 되도록 조립대에 그 주문이 남아 있을 때만 움직인다.
+
+    **stage 가 unclaimed 인 주문만 푼다.** AGV 가 엉뚱한 order_id 를 실었거나 station_id 의
+    조립대에 살아 있는 주문이 있으면, 그 주문의 조립대가 풀려 cnt_process 에서 사라지고
+    조립대가 이중 배정된다. 마감 해제(disarm)도 이 검사 뒤에 둔다 — 앞에 두면 남의 주문 시계가 꺼진다.
     """
     from services.dispatch import release_station
     from services import watchdog
 
-    watchdog.disarm(order_id)
     od = r.hgetall(f"order:{order_id}")
+    if not od:
+        return None                              # TTL 로 이미 사라졌다
+    if od.get("stage") != "unclaimed":
+        logger.warning(f"[finish] {order_id} stage={od.get('stage')} — unclaimed 가 아니라 폐기 해제 무시")
+        return None
+    watchdog.disarm(order_id)
     sid = od.get("station_id")
     if not sid or r.get(f"{STATION_ORDER_PREFIX}{sid}") != order_id:
         return None                              # 이미 풀렸다

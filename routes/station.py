@@ -10,7 +10,7 @@ from config import (STATION_KEY,
 from infra.logger import logger
 
 from infra.extensions import r
-from services.process import is_before, is_after
+from services.process import TERMINAL, is_before, is_after
 from services.archive import finish_order
 from services.watchdog import DEADLINE_KEY
 from infra.keys import (_order_counter_key,
@@ -106,7 +106,7 @@ def station_complete(station_id):
       400:
         description: 이 조립대에 진행 중인 주문이 없음
       409:
-        description: 화면에 표시된 order_id가 서버 기록과 불일치 (stale 상태)
+        description: 화면에 표시된 order_id가 서버 기록과 불일치 (stale 상태) · 이미 종료된 주문 (unclaimed·completed)
         schema:
           type: object
           properties:
@@ -133,7 +133,9 @@ def station_complete(station_id):
         }), 409
 
     stage = r.hget(f"order:{order_id}", "stage")
-    if is_after(stage, "received"):
+    # unclaimed 는 STAGE_ORDER 에서 received 보다 앞이라 is_after 만으로는 통과한다. 노쇼 주문은
+    # AGV 가 폐기를 마칠 때까지 조립대를 잡고 있으므로(services/archive.py) 여기서 완료로 풀면 안 된다.
+    if stage in TERMINAL or is_after(stage, "received"):
         return jsonify({'error': '이미 종료된 주문입니다', 'stage': stage}), 409
 
     # 아카이브 + 집계 → stage 전이 → 조립대 해제 → 다음 배정 (services/archive.py)
@@ -282,7 +284,7 @@ def get_station_status(station_id):
               type: integer
               example: 12
       400:
-        description: 이 조립대에 배정된 주문이 없음
+        description: 이 조립대에 배정된 주문이 없음 · 아직 도착 전 · 이미 종료된 주문(노쇼 폐기 대기 포함). ready=false
         schema:
           type: object
           properties:
@@ -306,6 +308,11 @@ def get_station_status(station_id):
     stage = order_data.get("stage")
     if is_before(stage, "arrived"):
         return jsonify({'ready': False, 'error': '아직 부품이 도착하지 않았습니다'}), 400
+    if stage in TERMINAL:
+        # 노쇼(unclaimed)는 AGV 가 폐기를 마칠 때까지 조립대를 잡고 있다 (services/archive.py).
+        # 그동안 ready 로 내주면 디스플레이가 떠난 손님의 주문을 계속 띄우고, 완료 버튼이 눌리면
+        # 폐기 전에 조립대가 풀린다. 끝난 주문은 '배정 없음' 과 같은 400 으로 내린다.
+        return jsonify({'ready': False, 'error': '이미 종료된 주문입니다', 'stage': stage}), 400
 
     elapsed = _elapsed_since_arrival(order_data)
     body = {

@@ -268,9 +268,10 @@ def _build_body():
 def push_process(periodic=False):
     """진행 중 주문 전체를 통째로 push. 변경분만 보내면 머신이 상태를 들게 된다.
 
-    내용이 직전 push와 같으면 아예 올리지 않는다.
+    내용이 **직전에 전송된** push와 같으면 아예 올리지 않는다.
       - 아무 데서나 push_process()를 불러도 안전하고 (재고 콜백 34개 포함)
       - seq가 '내용이 바뀔 때만' 오른다는 약속이 실제로 지켜진다.
+      - 지문(process:last)은 create_cin 이 성공한 뒤에만 남긴다 — 아래 주석.
 
     periodic=True 는 주기 재전송용 — 내용이 그대로면 seq를 유지한 채 다시 올린다.
     수신측의 'seq 같으면 무시' 필터가 여기서 작동한다.
@@ -285,7 +286,6 @@ def push_process(periodic=False):
 
     if changed:
         seq = r.incr("process:seq")
-        r.set("process:last", fingerprint)
     else:
         seq = int(r.get("process:seq") or 0)
 
@@ -296,7 +296,20 @@ def push_process(periodic=False):
     }
     logger.info(f"[process] push seq={seq} orders={list(body['orders'])} "
                 f"keycap_restock={body.get('keycap_restock')} board_restock={body.get('board_restock')}")
-    return create_cin("cnt_process", con)
+    ok = create_cin("cnt_process", con)
+
+    # 지문(process:last)은 **전송에 성공한 뒤** 남긴다. 먼저 남기면 전송이 실패해도 '머신이 봤다'로
+    # 기록돼, 같은 내용의 다음 push 가 중복으로 건너뛰어진다 — 배정 push 실패 → 롤백 → 재배정이
+    # CIN 없이 성공 처리되고 창고는 stage_timeout 까지 주문을 모르던 경로가 그것이다 (dispatch._assign).
+    # seq 는 이미 올라갔으므로 재전송은 번호 하나를 건너뛰고 나간다. 머신의 'seq 안 오르면 무시'
+    # 필터는 번호가 비는 것은 상관하지 않는다. 그 사이 스냅샷 도구가 내는 'Redis seq 가 Mobius 보다
+    # 앞선다' 경고가 정확히 이 상태다 (services/snapshot.py). document/flow-break-points.md 1번.
+    if changed and ok:
+        r.set("process:last", fingerprint)
+    elif changed:
+        logger.error(f"[process] push seq={seq} 전송 실패 — 지문을 남기지 않는다. "
+                     f"다음 push 가 같은 내용을 다시 보낸다")
+    return ok
 
 def restock_list(kind):
     """채워야 할 칸 목록. 순서가 흔들리면 내용이 같은데 fingerprint가 달라지므로 stock에서 정렬해 준다."""

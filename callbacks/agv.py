@@ -78,6 +78,34 @@ def _current_order(con, status=None):
     return cands[0][0]
 
 
+def _discard_target(con):
+    """폐기 보고(discarded)의 대상 주문. order_id → station_id → 조립대의 unclaimed 주문 하나.
+
+    _current_order 를 쓰지 않는다. 그 폴백은 '트레이를 들고 있는 단계'(AGV_HOLDING)의 주문을
+    고르는데, 폐기 중인 주문은 unclaimed 라 그 집합에 없다. order_id 도 station_id 도 없는
+    discarded 가 오면 다른 조립대의 pickup_reached·loaded 주문이 뽑혀 **그 조립대가 풀렸다** —
+    진행 중 주문이 cnt_process 에서 사라지고 조립대가 이중 배정된다.
+    (document/flow-break-points.md 3번. 잘못 실린 order_id 는 release_station_after_discard 가 거른다.)
+    """
+    order_id = con.get("order_id")
+    if order_id:
+        return order_id
+    station_id = str(con.get("station_id") or "")
+    if station_id:
+        return r.get(f"{STATION_ORDER_PREFIX}{station_id}")
+
+    cands = []
+    for sid in ("1", "2", "3"):
+        oid = r.get(f"{STATION_ORDER_PREFIX}{sid}")
+        if oid and r.hget(f"order:{oid}", "stage") == "unclaimed":
+            cands.append(oid)
+    if len(cands) == 1:
+        return cands[0]
+    if cands:
+        logger.error(f"[agv] 폐기 대상 모호 — unclaimed 주문 {cands}. AGV 가 order_id 를 실어야 한다")
+    return None
+
+
 def on_agv(con):
     coord = list(con.get("coord") or [])
     status = str(con.get("status") or "")
@@ -111,9 +139,9 @@ def on_agv(con):
         # 먼저 사라지지 않도록 조립대를 잡아 둔 채 넘어왔다 (services/archive.py).
         from services.archive import release_station_after_discard
 
-        order_id = con.get("order_id") or _current_order(con, status)
+        order_id = _discard_target(con)
         if order_id:
-            release_station_after_discard(order_id)
+            release_station_after_discard(order_id)      # unclaimed 가 아니면 안에서 무시한다
         else:
             logger.warning(f"[agv] 폐기 보고인데 대상 주문을 못 찾음 con={con}")
         logger.info("[agv] 폐기 완료 — 대기장소로 복귀 중")
