@@ -290,6 +290,8 @@ def _restore_process():
     orders, faulted = [], []
 
     for oid, o in (snap.get("orders") or {}).items():
+        if not isinstance(o, dict):         # {"open": true} — 진행 주문 없음 표시 (process._build_body)
+            continue
         stage = o.get("status")
         sid = str(o.get("station_id") or "")
         if not stage or stage not in STAGE_ORDER:

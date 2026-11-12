@@ -147,7 +147,8 @@ def _mobius(process):
             "seq": con.get("seq"),
             "updated_at": con.get("updated_at"),
             "orders": {oid: {"status": o.get("status"), "fault": o.get("fault")}
-                       for oid, o in (con.get("orders") or {}).items()},
+                       for oid, o in (con.get("orders") or {}).items()
+                       if isinstance(o, dict)},          # {"open": true} 는 주문이 아니다
         }
         rseq, mseq = process["seq"], con.get("seq")
         out["seq_match"] = rseq == mseq
