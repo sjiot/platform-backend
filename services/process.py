@@ -8,7 +8,7 @@ from infra.keys import _touch_order
 from infra.mobius import create_cin
 
 from config import KST, STAGE_ORDER, STATION_ORDER_PREFIX, WAREHOUSE_ORDER_KEY
-from services import collector, stock, watchdog
+from services import agv_fault, collector, stock, watchdog
 
 _ALIAS = {
     "keycap_mismatched": "assigned",
@@ -157,6 +157,8 @@ def clear_fault(order_id):
 
     r.hdel(key, "fault", "fault_section")
     _touch_order(order_id)
+    if (section or "").startswith(agv_fault.SECTION):
+        agv_fault.clear_status_if_fault()   # agv:status 에 load_failed 등이 남아 고장으로 보이지 않게
 
     if _resume_stage(order_id, stage):
         return                          # set_stage 가 시계·push 까지 했다
@@ -253,7 +255,9 @@ def _build_body():
             "fault_section": o.get("fault_section") or None,   # 어느 부품·선반인지
         }
 
-    body = {"orders": orders}
+    # 주문에 붙일 수 없는 AGV 고장. 없으면 null — 주문 fault 와 같이 'null = 해결'로 읽는다.
+    # restock 목록과 달리 키를 늘 싣는다. 해제가 키 삭제가 아니라 null 로 보여야 하므로.
+    body = {"orders": orders, "agv_fault": agv_fault.items()}
     # 스냅샷은 전량이므로 수신측은 '키 없음 = 빈 목록'으로 읽어야 한다 
     keycap_restock = restock_list("keycap")
     if keycap_restock:

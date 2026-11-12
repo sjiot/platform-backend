@@ -15,6 +15,9 @@
 | [04-experiments.md](04-experiments.md) | 리눅스 실험 환경과 절차, 결과 기록표 |
 | [05-poster-outline.md](05-poster-outline.md) | 포스터 구성, 그림·표 틀, 표현 주의점 |
 | [06-writing-guide.md](06-writing-guide.md) | 유사 논문 목록, 범위 결정, 2쪽 양식 기준 절별 구성 |
+| [07-cps-paper-structure.md](07-cps-paper-structure.md) | **현재 제출처 기준 논문 구조** (자율형 CPS, 폐루프 제어와 자율 범위) |
+
+2026-11-05에 제출처가 가상물리융합산업포럼 제7차 심포지엄으로 바뀌었다. 01~06은 이전 제출처 기준(통신 지연 분석과 개선)으로 쓴 것이고, 논문 구성은 07을 따른다.
 
 ## 논문의 중심 내용
 

@@ -5,8 +5,9 @@ from config import AGV_KEY, AGV_STATUS_KEY, STATION_ORDER_PREFIX, KST
 from infra.extensions import r
 from infra.logger import logger
 
-from services import agv_trail, watchdog
-from services.process import set_stage, set_fault, is_at_or_past
+from services import agv_fault, agv_trail, watchdog
+from services.agv_fault import FAULTS
+from services.process import set_stage, set_fault, is_at_or_past, push_process
 
 # status → (전이할 stage, 필요한 직전 stage)
 TRANSITIONS = {
@@ -14,13 +15,6 @@ TRANSITIONS = {
     "arrived": ("arrived", "loaded"),
     "unloaded": ("received", "verified"),
 }
-
-FAULTS = {
-    "load_failed": "pickup_failed",
-    "unload_failed": "drop_failed",
-    "agv_broken": "agv_broken",
-}
-
 
 def handle_agv(path, con):
     if path:
@@ -76,6 +70,34 @@ def _current_order(con, status=None):
         logger.error(f"[agv] 대상 주문 모호 status={status} 후보={holding} — 무시")
         return None
     return cands[0][0]
+
+
+def _fault_target(con):
+    """고장 보고(load_failed·unload_failed·agv_broken)를 붙일 주문. 없으면 None → 주문 없는 고장.
+
+    _current_order 를 쓰지 않는다. 그 폴백은 후보가 애매하면 아무 주문(cands[0])이나 집어서,
+    AGV가 이미 손을 뗀 received 주문에 agv_broken 이 붙었다. 고장은 'AGV가 지금 들고 있는
+    주문'에만 붙인다 — order_id → station_id → 트레이를 든 단계(AGV_HOLDING)의 주문 1건.
+    order_id 가 왔어도 이미 끝나 사라진 주문이면 붙이지 않는다 (빈 해시에 fault 만 생긴다).
+    """
+    order_id = con.get("order_id")
+    if not order_id:
+        station_id = str(con.get("station_id") or "")
+        if station_id:
+            order_id = r.get(f"{STATION_ORDER_PREFIX}{station_id}")
+    if order_id:
+        return order_id if r.exists(f"order:{order_id}") else None
+
+    holding = []
+    for sid in ("1", "2", "3"):
+        oid = r.get(f"{STATION_ORDER_PREFIX}{sid}")
+        if oid and r.hget(f"order:{oid}", "stage") in AGV_HOLDING:
+            holding.append(oid)
+    if len(holding) == 1:
+        return holding[0]
+    if holding:
+        logger.error(f"[agv] 고장 대상 주문 모호 — {holding}. 주문 없는 고장으로 올린다")
+    return None
 
 
 def _discard_target(con):
@@ -150,14 +172,20 @@ def on_agv(con):
         logger.info("[agv] 폐기 완료 — 대기장소로 복귀 중")
         return
 
+    if status in FAULTS:
+        # 어느 동작에서 실패했는지는 fault 값이 이미 말한다 (pickup_failed·drop_failed…).
+        # 대상 주문이 있으면 창고와 같이 orders.{id}.fault, 없으면 cnt_process 최상위 agv_fault.
+        order_id = _fault_target(con)
+        if order_id:
+            set_fault(order_id, FAULTS[status], section=agv_fault.SECTION)
+        else:
+            agv_fault.add(FAULTS[status])
+            push_process()
+        return
+
     order_id = _current_order(con, status)
     if not order_id:
         logger.warning(f"[agv] 대상 주문을 못 찾음 status={status} con={con}")
-        return
-
-    if status in FAULTS:
-        # 어느 동작에서 실패했는지는 fault 값이 이미 말한다 (pickup_failed·drop_failed…).
-        set_fault(order_id, FAULTS[status], section="agv")
         return
 
     if status not in TRANSITIONS:

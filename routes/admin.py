@@ -10,6 +10,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request
 
 from config import (QUEUE_KEY,
+                    AGV_KEY,
                     STATION_KEY,
                     STATION_ORDER_PREFIX,
                     WAREHOUSE_ORDER_KEY,
@@ -21,7 +22,7 @@ from config import (QUEUE_KEY,
                    )
 from infra.extensions import r
 from infra.logger import logger
-from services import recovery
+from services import agv_fault, recovery
 from services import line as line_state
 from services.archive import abort_order
 from services import snapshot as debug_snapshot
@@ -170,7 +171,68 @@ def list_faults():
                 "station_id": o.get("station_id"),
                 "order_seq": _to_int(o.get("order_seq")),
             })
-    return jsonify({"faults": out}), 200
+    return jsonify({"faults": out, "agv_fault": agv_fault.items()}), 200
+
+
+@bp.route("/admin/agv/fault/clear", methods=["POST"])
+def clear_agv_fault():
+    """
+    주문 없는 AGV 고장 해제 — cnt_process 의 agv_fault 를 null 로 올린다
+    ---
+    tags:
+      - Admin
+    description: |
+      대상 주문이 없는 AGV 고장(agv_fault)을 전부 해제한다. 관리자 해제로만 풀린다.
+      주문에 붙은 AGV fault(orders.{id}.fault)는 /admin/order/{id}/fault/clear 로 푼다.
+      해제 뒤 배정·새 주문 접수가 다시 열리고, 대기 주문 배정을 한 번 시도한다.
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            password:
+              type: string
+            parked:
+              type: boolean
+              default: false
+              description: "AGV 를 대기장소에 직접 옮겨 parked 보고가 오지 않는 경우 true — agv:occupancy 를 idle 로 돌린다"
+    responses:
+      200:
+        description: 해제 완료
+        schema:
+          type: object
+          example: {"ok": true, "cleared": ["agv_broken"], "agv": "idle", "assigned": null}
+      400:
+        description: 비밀번호 불일치
+      409:
+        description: 주문 없는 AGV 고장이 없음
+    """
+    from services.dispatch import try_assign_next
+    from services.process import push_process
+
+    data = request.get_json(silent=True) or {}
+    if data.get("password") != STATION_RESET_PASSWORD:
+        return jsonify({"error": "비밀번호가 틀렸습니다"}), 400
+    if not agv_fault.active():
+        return jsonify({"error": "주문 없는 AGV 고장이 없습니다"}), 409
+
+    cleared = agv_fault.clear()
+    agv_fault.clear_status_if_fault()
+    if data.get("parked"):
+        r.set(AGV_KEY, "idle")
+    logger.info(f"[admin] AGV 고장 해제 {cleared}" + (" · occupancy idle" if data.get("parked") else ""))
+
+    push_process()                  # agv_fault: null
+    assigned = try_assign_next()
+
+    return jsonify({
+        "ok": True,
+        "cleared": cleared,
+        "agv": r.get(AGV_KEY),
+        "assigned": assigned,
+    }), 200
 
 
 @bp.route("/admin/order/<order_id>/fault/clear", methods=["POST"])

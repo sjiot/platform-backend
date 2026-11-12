@@ -1,5 +1,41 @@
 # 작업 내역
 
+## 2026-11-12 AGV fault 를 cnt_process 에 주문별 · 주문 없는 것으로 나눠 올림
+
+**수정 파일:** `services/agv_fault.py`(신규), `callbacks/agv.py`, `services/process.py`, `services/dispatch.py`, `routes/order.py`, `routes/admin.py`, `services/recovery.py`, `config.py`, `tests/test_agv_fault.py`(신규, git 추적 제외)
+
+### 변경 전
+
+- 고장 보고의 대상 주문을 `_current_order` 로 찾았다. 후보가 애매하면 아무 주문(`cands[0]`)이나 골라, AGV 가 이미 손을 뗀 `received` 주문에 `agv_broken` 이 붙을 수 있었다.
+- 대상 주문을 못 찾은 고장 보고는 경고 로그만 남기고 버렸다. cnt_process 에도, 관리자 화면에도 나가지 않았다.
+- 주문 fault 를 해제해도 `agv:status` 에 `load_failed` 등이 남았다.
+
+### 변경 후
+
+| cnt_agv status | fault | 대상 주문 있음 | 대상 주문 없음 |
+|---|---|---|---|
+| `load_failed` | `pickup_failed` | `orders.{id}.fault`, section `agv` | 최상위 `agv_fault` |
+| `unload_failed` | `drop_failed` | 〃 | 〃 |
+| `agv_broken` | `agv_broken` | 〃 | 〃 |
+| `arrived` 오배송 | `drop_failed` | `orders.{id}.fault`, section `agv:station{sid}` (기존) | - |
+
+- 대상 주문: con 의 `order_id` → `station_id` → 트레이를 든 단계(`pickup_reached`·`loaded`·`arrived`·`verified`)의 주문 1건. 이미 사라진 주문의 `order_id` 는 대상 없음으로 본다.
+- `agv_fault` 는 cnt_process 에 늘 실린다. 고장이 없으면 `null`, 있으면 `[{fault, fault_section: "agv", at}]`. 해결은 주문 fault 와 같이 `null` 로 확인한다.
+- 주문 없는 고장은 관리자 해제(`POST /admin/agv/fault/clear`, body `password`·`parked`)로만 풀린다. `parked` 보고로는 풀리지 않는다.
+- 걸려 있는 동안 배정(`try_assign_next`)과 새 주문 접수(`POST /order` 409)를 막는다. 해제하면 배정을 한 번 다시 시도한다.
+- `GET /admin/faults` 응답에 `agv_fault` 추가. `/admin/reset` 이 `agv:faults` 를 지운다.
+- 주문의 AGV fault 를 해제하면 `agv:status` 의 고장 값도 지운다.
+
+### 확인 결과
+
+- 전체 테스트 통과 (가짜 Redis·Mobius 기준, 신규 16건 포함). 실제 장비 확인 전.
+- 배포 직후 cnt_process 본문에 `agv_fault` 키가 생기므로 seq 가 한 번 오른다.
+
+### 남은 일
+
+- [ ] AGV 팀: cnt_process 의 `agv_fault` 형식 전달, `null` 이면 재개하도록 합의
+- [ ] 관리자 페이지: `agv_fault` 표시와 해제 버튼 연결
+
 ## 2026-11-11 가상 테스트 전 흐름 단절 지점 정리 · 1·3·6 수정
 
 **수정 파일:** `services/process.py`, `callbacks/agv.py`, `services/archive.py`, `routes/station.py`, `document/flow-break-points.md`(신규), `tests/test_flow_breaks.py`(신규, git 추적 제외)

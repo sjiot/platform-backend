@@ -9,6 +9,8 @@ AGV_KEY = os.getenv("AGV_KEY", "agv:occupancy")
 # occupancy(idle/busy)만으로는 'AGV가 지금 어디서 뭘 하는 중인지'를 알 수 없어서
 # 워치독이 정상 대기와 고장을 구분하지 못한다.
 AGV_STATUS_KEY = os.getenv("AGV_STATUS_KEY", "agv:status")
+# 주문에 붙일 수 없는 AGV 고장 (services/agv_fault.py). fault 이름 → JSON. cnt_process 의 agv_fault 로 나간다.
+AGV_FAULT_KEY = os.getenv("AGV_FAULT_KEY", "agv:faults")
 AGV_COORD_KEY = os.getenv("AGV_COORD_KEY", "agv:coord")
 # 대시보드 AGV 이동경로 (services/agv_trail.py).
 # agv:coord 는 마지막 점(JSON), agv:trail 은 현재 구간의 점 목록, agv:leg 는 구간 번호.

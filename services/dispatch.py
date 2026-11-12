@@ -34,7 +34,7 @@ from infra.logger import logger
 from infra.keys import _touch_order, _get_free_station
 from infra.mobius import _dispatch_order, _push_station_snapshot
 
-from services import stock, collector
+from services import agv_fault, stock, collector
 from services.process import set_stage, push_process
 
 STATIONS = ("1", "2", "3")
@@ -50,6 +50,8 @@ def try_assign_next():
         return None
     if r.get(AGV_KEY) != "idle":
         return None                 # AGV 배송 중. parked 보고에서 다시 부른다
+    if agv_fault.active():
+        return None                 # 주문 없는 AGV 고장. 관리자 해제(/admin/agv/fault/clear)에서 다시 부른다
 
     station_id = _get_free_station()
     if not station_id:

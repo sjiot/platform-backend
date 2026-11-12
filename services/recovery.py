@@ -41,6 +41,7 @@ from datetime import datetime
 
 from config import (AGV_KEY,
                     AGV_STATUS_KEY,
+                    AGV_FAULT_KEY,
                     ARCHIVE_PREFIX,
                     ORDER_COUNTER_KEY,
                     DEADLINE_KEY,
@@ -83,7 +84,7 @@ DISPENSE_LOOKBACK = 8
 # seq 를 1부터 다시 시작하면 그 필터에 걸려 복구 뒤 모든 스냅샷이 버려진다.
 # 내용 지문(process:last)만 지워서 복구 직후 한 번은 반드시 나가게 한다.
 _STATE_KEYS = [WAREHOUSE_KEY, WAREHOUSE_ORDER_KEY, WAREHOUSE_DRIVER_KEY, WAREHOUSE_RESTOCK_KEY,
-               STATION_KEY, AGV_KEY, AGV_STATUS_KEY,
+               STATION_KEY, AGV_KEY, AGV_STATUS_KEY, AGV_FAULT_KEY,
                DEADLINE_KEY, "process:last",
                "robot:status",                       # 안 쓰는 옛 키. 남아 있으면 같이 정리
                "stock:seed:lock", "watchdog:lock"]

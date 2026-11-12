@@ -28,6 +28,7 @@ from services.order_service import _is_valid_mbti
 from services.dispatch import try_assign_next
 from services.line import require_open, is_open as line_is_open
 from services.process import active_order_ids
+from services import agv_fault
 
 bp = Blueprint('order', __name__)
 
@@ -40,7 +41,8 @@ def require_no_fault(view):
     """
     @wraps(view)
     def wrapper(*args, **kwargs):
-        if any(r.hget(f"order:{oid}", "fault") for oid in active_order_ids()):
+        # 주문 없는 AGV 고장(agv_fault)도 같이 막는다 — AGV 가 서 있으면 받은 주문이 픽업대에서 멈춘다.
+        if agv_fault.active() or any(r.hget(f"order:{oid}", "fault") for oid in active_order_ids()):
             return jsonify({'error': '설비 점검 중입니다. 잠시 후 다시 시도해주세요', 'fault': True}), 409
         return view(*args, **kwargs)
     return wrapper
