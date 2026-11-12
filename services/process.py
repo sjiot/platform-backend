@@ -237,8 +237,15 @@ def active_order_ids():
             oids.append(oid)
     return oids
 
-def _build_body():
-    """스냅샷의 '내용' 부분. seq·updated_at은 뺀다 — 매번 달라져서 비교가 안 되므로."""
+def _build_body(reset=False):
+    """스냅샷의 '내용' 부분. seq·updated_at은 뺀다 — 매번 달라져서 비교가 안 되므로.
+
+    진행 주문이 없으면 "open": true 를 싣는다. 머신은 orders 가 빈 스냅샷을 리셋으로 읽으므로,
+    중단(abort)·완료로 주문이 다 빠진 것과 관리자 리셋을 이 키로 가른다.
+    open 이 없는 빈 스냅샷은 POST /admin/reset 의 push(reset=True) 한 번뿐이다.
+    스냅샷은 전량이라 중단 API 에서만 실으면 안 된다 — 다음 push(재고 콜백 등)가 open 없이
+    다시 나가서 머신이 그걸 리셋으로 본다.
+    """
     orders = {}
     for oid in active_order_ids():
         o = r.hgetall(f"order:{oid}")
@@ -260,6 +267,8 @@ def _build_body():
     body = {"orders": orders,
             "agv_fault": agv_fault.items(),
             "warehouse_fault": warehouse_fault.items()}
+    if not orders and not reset:
+        body["open"] = True
     # 스냅샷은 전량이므로 수신측은 '키 없음 = 빈 목록'으로 읽어야 한다 
     keycap_restock = restock_list("keycap")
     if keycap_restock:
@@ -271,7 +280,7 @@ def _build_body():
 
     return body
 
-def push_process(periodic=False):
+def push_process(periodic=False, reset=False):
     """진행 중 주문 전체를 통째로 push. 변경분만 보내면 머신이 상태를 들게 된다.
 
     내용이 **직전에 전송된** push와 같으면 아예 올리지 않는다.
@@ -281,8 +290,10 @@ def push_process(periodic=False):
 
     periodic=True 는 주기 재전송용 — 내용이 그대로면 seq를 유지한 채 다시 올린다.
     수신측의 'seq 같으면 무시' 필터가 여기서 작동한다.
+
+    reset=True 는 POST /admin/reset 전용 — 주문이 없어도 open 을 싣지 않는다 (_build_body).
     """
-    body = _build_body()
+    body = _build_body(reset=reset)
     fingerprint = json.dumps(body, sort_keys=True, ensure_ascii=False)
     changed = fingerprint != r.get("process:last")
 

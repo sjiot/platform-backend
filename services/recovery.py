@@ -388,7 +388,8 @@ def reset(mode="zero", keep_queue=False, reset_seq=False, flush_unknown=False):
 
     # 머신에 새 스냅샷을 알린다. zero 면 '진행 중 주문 없음'이 나간다.
     # process:last 를 지웠으므로 내용이 같아도 반드시 한 번은 나간다.
-    report["pushed"] = push_process()
+    # reset=True — open 키 없는 빈 orders 가 머신에게 '리셋'이다 (process._build_body).
+    report["pushed"] = push_process(reset=True)
 
     # 큐를 보존했으면 배정을 다시 시도한다 — 자리가 비어 있을 수 있다.
     if keep_queue:
