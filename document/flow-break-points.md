@@ -18,7 +18,7 @@
 | 4 | `keycap_mismatched` 재출고 명령에 부족분이 없다 | 높음 | `services/process.py`, `callbacks/warehouse.py` | 창고 팀 확인 필요 |
 | 5 | 다중 워커에서 옛 스냅샷이 더 큰 seq 로 나갈 수 있다 | 중간 (운영) | `services/process.py` | 미수정 |
 | 6 | 노쇼 뒤 조립대 조회가 ready 이고, 완료 버튼이 폐기 전에 조립대를 푼다 | 중간 | `routes/station.py`, `services/archive.py` | **수정** (2026-11-11) |
-| 7 | 창고 초기화 CIN(status null)이 진행 주문에 fault 를 건다 | 중간 | `callbacks/warehouse.py` | 미수정 |
+| 7 | 창고 초기화 CIN(status null)이 진행 주문에 fault 를 건다 | 중간 | `callbacks/warehouse.py` | **수정** (2026-11-12) |
 | 8 | 새 PC 첫 기동 순서가 틀리면 아무것도 배정되지 않는다 | 중간 | `services/stock.py`, `routes/admin.py`, `services/line.py` | 절차로 흡수 |
 | 9 | 문서화된 콜백 불일치 4건 | 중간 | `callbacks/conveyor.py`, `callbacks/agv.py` | 미수정 |
 | 10 | 가상 테스트 자체를 방해하는 것 — 120초 마감, discovery 순서, snapshot 500 | 낮음 | `services/watchdog.py`, `infra/mobius.py`, `services/snapshot.py` | 확인 필요 |

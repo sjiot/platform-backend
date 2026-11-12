@@ -33,6 +33,8 @@ WAREHOUSE_ORDER_KEY = os.getenv("WAREHOUSE_ORDER_KEY", "warehouse:current_order"
 WAREHOUSE_DRIVER_KEY = os.getenv("WAREHOUSE_DRIVER_KEY", "warehouse:driver_failed")
 # 관리자가 채웠지만 창고가 아직 반영(count>0 보고)하지 않은 칸 — cnt_process 의 *_restock 원천
 WAREHOUSE_RESTOCK_KEY = os.getenv("WAREHOUSE_RESTOCK_KEY", "warehouse:restock")
+# 주문에 붙일 수 없는 창고 고장 (services/warehouse_fault.py). fault_section → JSON. cnt_process 의 warehouse_fault 로 나간다.
+WAREHOUSE_FAULT_KEY = os.getenv("WAREHOUSE_FAULT_KEY", "warehouse:faults")
 STATION_ORDER_PREFIX = os.getenv("STATION_ORDER_PREFIX", "station:current_order:")
 MAX_QUEUE_LEN = 3  # 조립대 개수와 동일 (그 이상 대기시켜봤자 처리 못 함)
 

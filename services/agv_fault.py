@@ -9,12 +9,9 @@ AGV fault 는 두 갈래로 나간다.
 풀리는 경로는 관리자 해제(POST /admin/agv/fault/clear) 하나뿐이다 — parked 같은 정상 보고는
 평소에도 오므로 회복 신호로 쓰지 않는다. 걸려 있는 동안 배정·새 주문 접수를 막는다.
 """
-import json
-from datetime import datetime
-
-from config import AGV_FAULT_KEY, AGV_STATUS_KEY, KST
+from config import AGV_FAULT_KEY, AGV_STATUS_KEY
 from infra.extensions import r
-from infra.logger import logger
+from services.device_fault import DeviceFaults
 
 # cnt_agv status → fault
 FAULTS = {
@@ -25,38 +22,14 @@ FAULTS = {
 
 SECTION = "agv"
 
+_faults = DeviceFaults(AGV_FAULT_KEY, "agv_fault")
+items = _faults.items
+active = _faults.active
+clear = _faults.clear
+
 
 def add(fault):
-    """같은 fault 가 다시 오면 시각만 갱신한다 (재전송·반복 보고)."""
-    item = {"fault": fault, "fault_section": SECTION,
-            "at": datetime.now(KST).isoformat(timespec="seconds")}
-    r.hset(AGV_FAULT_KEY, fault, json.dumps(item, ensure_ascii=False))
-    logger.error(f"[agv_fault] 주문 없는 AGV 고장 <- {fault}")
-
-
-def items():
-    """cnt_process 에 실을 값. 없으면 None. fault 이름순 — 순서가 흔들리면 push 지문이 달라진다."""
-    raw = r.hgetall(AGV_FAULT_KEY)
-    if not raw:
-        return None
-    out = []
-    for name in sorted(raw):
-        try:
-            out.append(json.loads(raw[name]))
-        except (TypeError, ValueError):
-            out.append({"fault": name, "fault_section": SECTION, "at": None})
-    return out
-
-
-def active():
-    return bool(r.exists(AGV_FAULT_KEY))
-
-
-def clear():
-    """전부 지우고 지운 fault 이름 목록을 돌려준다. push 는 호출부가 한다."""
-    names = sorted(r.hkeys(AGV_FAULT_KEY))
-    r.delete(AGV_FAULT_KEY)
-    return names
+    _faults.add(fault, SECTION, field=fault)
 
 
 def clear_status_if_fault():

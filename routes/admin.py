@@ -22,7 +22,7 @@ from config import (QUEUE_KEY,
                    )
 from infra.extensions import r
 from infra.logger import logger
-from services import agv_fault, recovery
+from services import agv_fault, recovery, warehouse_fault
 from services import line as line_state
 from services.archive import abort_order
 from services import snapshot as debug_snapshot
@@ -171,7 +171,9 @@ def list_faults():
                 "station_id": o.get("station_id"),
                 "order_seq": _to_int(o.get("order_seq")),
             })
-    return jsonify({"faults": out, "agv_fault": agv_fault.items()}), 200
+    return jsonify({"faults": out,
+                    "agv_fault": agv_fault.items(),
+                    "warehouse_fault": warehouse_fault.items()}), 200
 
 
 @bp.route("/admin/agv/fault/clear", methods=["POST"])
@@ -285,6 +287,68 @@ def clear_order_fault(order_id):
         "order_id": order_id,
         "cleared": fault,
         "stage": order.get("stage"),
+    }), 200
+
+
+@bp.route("/admin/warehouse/fault/clear", methods=["POST"])
+def clear_warehouse_fault():
+    """
+    주문 없는 창고 고장 해제 — cnt_process 의 warehouse_fault 항목을 지운다
+    ---
+    tags:
+      - Admin
+    description: |
+      warehouse_fault 항목만 지운다. fault_section 을 주면 그 항목 하나, 없으면 전부.
+      남은 항목이 없으면 cnt_process 에 warehouse_fault: null 이 나가고 새 주문 접수가 다시 열린다.
+      칸 상태(disable·empty)와 선반 차단은 건드리지 않는다 — 그 칸을 쓰는 조합은 계속 품절로 막히고,
+      창고가 idle·busy 를 올리거나 /admin/stock/revive 로 되살릴 때 풀린다.
+      revive 가 409 로 안 되는 경우(고장 뒤 empty 가 와서 disable 이 아님 등)에 쓴다.
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            password:
+              type: string
+            fault_section:
+              type: string
+              description: "지울 항목. 예: keycap_cartridge:keycap1:E_r · keycap_cartridge:keycap1. 생략하면 전부"
+    responses:
+      200:
+        description: 해제 완료
+        schema:
+          type: object
+          example: {"ok": true, "cleared": ["keycap_cartridge:keycap1:E_r"], "warehouse_fault": null}
+      400:
+        description: 비밀번호 불일치
+      409:
+        description: 지울 항목이 없음 (고장 없음 또는 그 fault_section 없음)
+    """
+    from services.process import push_process
+
+    data = request.get_json(silent=True) or {}
+    if data.get("password") != STATION_RESET_PASSWORD:
+        return jsonify({"error": "비밀번호가 틀렸습니다"}), 400
+
+    section = data.get("fault_section")
+    if section:
+        cleared = warehouse_fault.remove([str(section)])
+    else:
+        cleared = warehouse_fault.clear()
+    if not cleared:
+        return jsonify({"error": "지울 창고 고장이 없습니다",
+                        "fault_section": section,
+                        "warehouse_fault": warehouse_fault.items()}), 409
+
+    logger.info(f"[admin] 창고 고장 해제 {cleared}")
+    push_process()                  # 남은 게 없으면 warehouse_fault: null
+
+    return jsonify({
+        "ok": True,
+        "cleared": cleared,
+        "warehouse_fault": warehouse_fault.items(),
     }), 200
 
 
@@ -962,6 +1026,8 @@ def admin_stock_revive():
           idle 로 되돌림. 그 선반의 드라이버 고장 표시가 있었으면 같이 지우고 shelf_cleared=true.
           이 칸·선반을 가리키는 주문 fault 가 있었으면 같이 해제하고 faults_cleared 에 주문 id 를 싣는다
           (cnt_process 에 fault·fault_section 이 null 로 나간다).
+          주문 없는 창고 고장(cnt_process warehouse_fault)의 이 칸·선반 항목도 지우고
+          warehouse_faults_cleared 에 그 fault_section 을 싣는다. 남은 항목이 없으면 warehouse_fault 는 null.
       400:
         description: 비밀번호 불일치 · part 누락 · 존재하지 않는 칸 · 재고 데이터 없음
       409:
@@ -998,6 +1064,9 @@ def admin_stock_revive():
     faults_cleared = clear_faults_at(part)
     if faults_cleared:
         logger.info(f"[admin] {part} 되살림 → 주문 fault 해제 {faults_cleared}")
+    # 주문 없는 창고 고장(warehouse_fault)도 그 칸 + 그 선반 항목을 지운다.
+    # push 는 아래 on_stock_recovered 가 한다 (배정이 없어도 push_process).
+    warehouse_faults_cleared = warehouse_fault.clear_slot(part)
 
     # 이 칸 때문에 blocked_by 로 기다리던 주문을 다시 배정해 본다 (콜백 복구와 같은 경로).
     from services.dispatch import on_stock_recovered
@@ -1012,6 +1081,7 @@ def admin_stock_revive():
         "shelf": shelf,
         "shelf_cleared": shelf_cleared,
         "faults_cleared": faults_cleared,
+        "warehouse_faults_cleared": warehouse_faults_cleared,
         "assigned": assigned,
     }), 200
 

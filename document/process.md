@@ -1,5 +1,42 @@
 # 작업 내역
 
+## 2026-11-12 주문 없는 창고 고장을 cnt_process warehouse_fault 로 보고
+
+**수정 파일:** `services/device_fault.py`(신규), `services/warehouse_fault.py`(신규), `services/agv_fault.py`, `callbacks/warehouse.py`, `services/process.py`, `routes/order.py`, `routes/admin.py`, `services/recovery.py`, `config.py`, `tests/test_warehouse_fault.py`(신규, git 추적 제외)
+
+### 변경 전
+
+- 칸 고장(`disable`)은 진행 주문이 그 칸을 아직 써야 할 때만 주문 fault 로 올라갔다. 주문이 없거나, 이미 지나갔거나, 다른 칸이면 로그만 남고 cnt_process 에는 나가지 않았다.
+- `idle`·`busy` 가 아닌 status 는 전부 disable/empty 갈래로 갔다. 창고 재기동 초기화 CIN(`status: null`)이 진행 주문에 `keycap_cartridge_failed` 를 걸었다 (flow-break-points 7번).
+
+### 변경 후
+
+| 칸 보고 | 진행 주문이 그 칸을 아직 써야 함 | 그 밖 |
+|---|---|---|
+| keycap `disable` (`keycap_cartridge_failed`) | 주문 fault (기존) | `warehouse_fault` — section `keycap_cartridge:keycap1:E_r` |
+| keycap `disable` (`keycap_driver_failed`) | 주문 fault (기존) | `warehouse_fault` — section `keycap_cartridge:keycap1` (선반 8칸이 한 줄) |
+| `empty`, board `disable` | 기존대로 | 올리지 않음 |
+| `null`·모르는 status | 저장만, fault 없음 | 저장만 |
+
+- cnt_process 에 `"warehouse_fault"` 를 늘 싣는다. 고장이 없으면 `null`, 있으면 `[{fault, fault_section, at}]`.
+- 풀리는 경로 셋.
+  - 창고가 그 칸에서 `idle`·`busy` 를 올림 (그 칸 + 그 선반 항목)
+  - 관리자 `POST /admin/stock/revive` — 칸 되살림과 함께 (응답에 `warehouse_faults_cleared`)
+  - 관리자 `POST /admin/warehouse/fault/clear` (body `password`, `fault_section` 선택) — 항목만 지운다. 칸 상태는 그대로. 고장 뒤 `empty` 가 와서 revive 가 409 인 경우용
+- 걸려 있는 동안 새 주문 접수(`POST /order`)만 409. 배정은 막지 않는다 — 고장 칸을 쓰는 주문만 `blockers` 가 뒤로 민다.
+- `GET /admin/faults` 에 `warehouse_fault` 추가. `/admin/reset` 이 `warehouse:faults` 를 지운다.
+- `agv_fault` 와 저장·조회 코드를 `services/device_fault.py` 로 합쳤다. AGV 는 fault 이름, 창고는 fault_section 을 필드로 쓴다.
+
+### 확인 결과
+
+- 전체 테스트 통과 (가짜 Redis·Mobius 기준, 신규 19건 포함). 실제 장비 확인 전.
+- 배포 직후 cnt_process 본문에 `warehouse_fault` 키가 생기므로 seq 가 한 번 오른다.
+
+### 남은 일
+
+- [ ] 창고 팀: cnt_process 의 `warehouse_fault` 형식 전달
+- [ ] 관리자 페이지: `warehouse_fault` 표시, 항목별 revive 연결
+
 ## 2026-11-12 AGV fault 를 cnt_process 에 주문별 · 주문 없는 것으로 나눠 올림
 
 **수정 파일:** `services/agv_fault.py`(신규), `callbacks/agv.py`, `services/process.py`, `services/dispatch.py`, `routes/order.py`, `routes/admin.py`, `services/recovery.py`, `config.py`, `tests/test_agv_fault.py`(신규, git 추적 제외)

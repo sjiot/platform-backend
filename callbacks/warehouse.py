@@ -2,7 +2,7 @@ from config import WAREHOUSE_ORDER_KEY
 from infra.extensions import r
 from infra.logger import logger
 
-from services import collector, stock
+from services import collector, stock, warehouse_fault
 from services.stock import BOARD_SLOT_MAP as BOARD_CODE
 from services.process import set_stage, set_fault, push_process
 
@@ -203,6 +203,10 @@ def on_cartridge_status(kind, cartridge_id, con):
         revived = bool(stock.clear_driver_failed(shelf))
         if revived:
             logger.info(f"[{kind}_status] 선반 {shelf} 드라이버 복구 — 8칸 차단 해제")
+        # 주문 없는 창고 고장도 같은 판단으로 푼다 — 그 칸 + 그 선반 항목.
+        # push 는 아래 두 갈래가 모두 한다 (on_stock_recovered 도 배정이 없으면 push).
+        if warehouse_fault.clear_slot(cartridge_id):
+            logger.info(f"[{kind}_status] {cartridge_id}={status} — 주문 없는 창고 고장 해제")
         if revived or (int(count or 0) > 0
                        and (prev_status in stock.BLOCKING_STATUS or prev_count <= 0)):
             from services.dispatch import on_stock_recovered
@@ -211,6 +215,14 @@ def on_cartridge_status(kind, cartridge_id, con):
             # count 0 은 restock 목록을 바꾸지 않는다 — 관리자가 채워야 들어간다.
             # 위에서 목록이 바뀌었으면 여기서 나간다. 내용이 같으면 push_process가 안 올린다.
             push_process()
+        return
+
+    # 정상(idle·busy)도 고장(disable·empty)도 아닌 status — 창고 재기동 초기화 CIN 의 null 등.
+    # 저장만 한다. 예전엔 아래 disable/empty 갈래로 떨어져 진행 주문에 keycap_cartridge_failed 가
+    # 붙었고, 재기동 한 번에 36건이 쏟아져 fault 가 덮어써졌다 (flow-break-points 7번).
+    if status not in stock.BLOCKING_STATUS:
+        logger.warning(f"[{kind}_status] {cartridge_id} 모르는 status={status!r} — 저장만, fault 없음")
+        push_process()
         return
 
     # disable / empty — 진행 중 주문이 그 칸을 '아직 배출 전'일 때만 fault (명세 6-3)
@@ -271,5 +283,14 @@ def on_cartridge_status(kind, cartridge_id, con):
             push_process()
             return
 
+    # 진행 주문과 관계없는 고장 → cnt_process 최상위 warehouse_fault (services/warehouse_fault.py).
+    # empty 는 품절이라 올리지 않고(/stock/out·blockers 가 맡는다), 보드는 정의된 fault 가 없다.
+    if kind == "keycap" and status == "disable":
+        if driver_dead:
+            warehouse_fault.add("keycap_driver_failed",
+                                stock.section_of(cartridge_id, shelf_only=True))
+        else:
+            warehouse_fault.add("keycap_cartridge_failed", stock.section_of(cartridge_id))
+
     logger.warning(f"[{kind}_status] {cartridge_id}={status} — 해당 조합 주문 차단")
-    push_process()                          # 진행 주문이 없어도 restock 목록 변화는 나가야 한다
+    push_process()                          # 진행 주문이 없어도 restock·warehouse_fault 변화는 나가야 한다
