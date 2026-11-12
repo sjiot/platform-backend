@@ -1,29 +1,33 @@
 """큐 → 조립대 배정.
 
-배정 게이트 셋.
+배정 게이트 넷.
     1. 창고가 비었나        warehouse:occupancy == idle   (주문 1건씩 처리)
-    2. 조립대 빈 칸이 있나   station:current_order:{1,2,3}
-    3. 이 주문이 쓰는 카트리지 5칸이 멀쩡한가   stock.blockers()
+    2. AGV가 대기장소에 있나 agv:occupancy == idle        (parked 보고로만 idle 이 된다)
+    3. 조립대 빈 칸이 있나   station:current_order:{1,2,3}
+    4. 이 주문이 쓰는 카트리지 5칸이 멀쩡한가   stock.blockers()
 
-AGV는 게이트로 쓰지 않는다. AGV가 1대라 넣고 싶어지지만, 넣으면 앞 주문이 조립대에서
-사용자를 기다리는 동안(최대 3분) 창고가 놀게 되어 사실상 1주문씩만 도는 파이프라인이 된다.
-대신 AGV를 기다리느라 pickup_reached 마감(120초)을 넘기는 문제는 워치독이 흡수한다 —
-cnt_agv 의 마지막 status 가 station_arrived 면 고장이 아니라 정상 대기이므로 마감을 연장한다
-(services/watchdog.py `_agv_waiting_at_station`).
+AGV 게이트는 창고가 AGV보다 최대 한 주문만 앞서가게 한다. agv:occupancy 는 loaded 에서
+busy, parked 에서 idle 이 되므로 —
+    주문1 pickup_reached, AGV parked  → 주문2 배정 (AGV는 곧 주문1을 집으러 간다)
+    주문2 pickup_reached, AGV 배송 중 → 막힘. 창고는 idle 로 대기
+    AGV parked                        → 주문3 배정, AGV는 픽업대의 주문2를 집으러 간다
+픽업대에 트레이가 두 개 쌓이지 않는 건, AGV가 parked 직후 픽업대로 가서 싣는 시간이
+창고가 다음 트레이를 픽업대까지 보내는 시간보다 짧다는 전제에 기댄다.
 
 카트리지 idle/busy는 게이트로 쓰지 않는다. 창고가 idle이면 카트리지도 idle이어야 하고,
 idle CIN 하나만 유실돼도(주문당 카트리지 콜백이 10건) 그 칸이 영구히 busy로 남아 교착된다.
 
 배정 트리거 — 배정을 막던 조건이 풀리는 지점 전부에서 try_assign_next()를 부른다.
-창고 busy거나 빈 조립대가 없으면 즉시 None으로 빠지므로 값이 싸다.
+창고·AGV busy거나 빈 조립대가 없으면 즉시 None으로 빠지므로 값이 싸다.
     POST /order 접수 직후          큐에 새 주문                    routes/order.py
     pickup_reached                 창고가 비었음 (벨트 비었음)      callbacks/conveyor.py
+    parked                         AGV가 대기장소로 복귀            callbacks/agv.py
     completed / unclaimed          조립대가 비었음                  routes/station.py · watchdog
     카트리지 정상 복귀              막혀 있던 주문이 풀림            callbacks/warehouse.py
 """
 import json
 
-from config import (QUEUE_KEY, WAREHOUSE_KEY, STATION_KEY,
+from config import (QUEUE_KEY, WAREHOUSE_KEY, STATION_KEY, AGV_KEY,
                     WAREHOUSE_ORDER_KEY, STATION_ORDER_PREFIX)
 from infra.extensions import r
 from infra.logger import logger
@@ -44,6 +48,8 @@ def try_assign_next():
     """큐 앞에서부터 훑어 처음으로 배치 가능한 주문 1건을 배정. 배정했으면 order_id."""
     if r.get(WAREHOUSE_KEY) != "idle" or r.get(WAREHOUSE_ORDER_KEY):
         return None
+    if r.get(AGV_KEY) != "idle":
+        return None                 # AGV 배송 중. parked 보고에서 다시 부른다
 
     station_id = _get_free_station()
     if not station_id:

@@ -127,6 +127,9 @@ def on_agv(con):
         logger.info("[agv] 대기장소 복귀 — idle")
         # AGV가 자유로워졌다 → 픽업대에서 기다리던 주문의 시계를 새로 건다.
         watchdog.rearm_pickup_waiters()
+        # AGV 게이트가 풀렸다 → AGV 배송 중이라 막혀 있던 배정을 다시 시도한다.
+        from services.dispatch import try_assign_next
+        try_assign_next()
         return
 
     # parked 를 뺀 모든 보고는 'AGV가 살아 움직인다'는 증거다.
