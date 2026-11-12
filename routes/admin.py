@@ -299,7 +299,8 @@ def clear_warehouse_fault():
       - Admin
     description: |
       warehouse_fault 항목만 지운다. fault_section 을 주면 그 항목 하나, 없으면 전부.
-      남은 항목이 없으면 cnt_process 에 warehouse_fault: null 이 나가고 새 주문 접수가 다시 열린다.
+      남은 항목이 없으면 cnt_process 에 warehouse_fault: null 이 나간다.
+      keycap_driver_failed 항목이 하나도 안 남으면 새 주문 접수가 다시 열린다 (칸 고장은 접수를 막지 않는다).
       칸 상태(disable·empty)와 선반 차단은 건드리지 않는다 — 그 칸을 쓰는 조합은 계속 품절로 막히고,
       창고가 idle·busy 를 올리거나 /admin/stock/revive 로 되살릴 때 풀린다.
       revive 가 409 로 안 되는 경우(고장 뒤 empty 가 와서 disable 이 아님 등)에 쓴다.

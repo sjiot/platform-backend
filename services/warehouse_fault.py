@@ -15,8 +15,9 @@ empty(품절)와 board disable 은 올리지 않는다 — 품절은 /stock/out�
   - 창고가 그 칸에서 idle·busy 를 다시 올림 (그 칸 + 그 선반 항목)
   - 관리자 POST /admin/stock/revive (칸 되살림과 함께)
   - 관리자 POST /admin/warehouse/fault/clear (항목만. 칸 상태는 그대로)
-걸려 있는 동안 새 주문 접수(POST /order)를 막는다. 배정은 막지 않는다 — 고장 칸을 쓰는
-주문만 blockers 가 뒤로 민다.
+새 주문 접수(POST /order)는 keycap_driver_failed(선반 전체)가 걸려 있을 때만 막는다.
+keycap_cartridge_failed(칸 하나)는 그 칸을 쓰는 조합만 막힌다 — 칸이 disable 이라 blockers 가
+뒤로 민다. 배정은 어느 쪽도 막지 않는다.
 """
 from config import WAREHOUSE_FAULT_KEY
 from services import stock
@@ -27,6 +28,15 @@ items = _faults.items
 active = _faults.active
 clear = _faults.clear
 remove = _faults.remove
+
+
+# 걸려 있으면 새 주문 접수 전체를 막는 fault. 나머지는 그 칸만 blockers 가 막는다.
+BLOCKS_INTAKE = {"keycap_driver_failed"}
+
+
+def blocks_intake():
+    """새 주문 접수를 막아야 하는 창고 고장이 있나 (routes/order.require_no_fault)."""
+    return any(item.get("fault") in BLOCKS_INTAKE for item in (items() or []))
 
 
 def add(fault, section):

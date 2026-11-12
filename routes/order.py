@@ -41,8 +41,9 @@ def require_no_fault(view):
     """
     @wraps(view)
     def wrapper(*args, **kwargs):
-        # 주문 없는 AGV·창고 고장(agv_fault·warehouse_fault)도 같이 막는다.
-        if (agv_fault.active() or warehouse_fault.active()
+        # 주문 없는 AGV 고장, 창고 선반 고장(keycap_driver_failed)도 같이 막는다.
+        # 창고 칸 고장(keycap_cartridge_failed)은 막지 않는다 — 그 칸을 쓰는 조합만 blockers 가 막는다.
+        if (agv_fault.active() or warehouse_fault.blocks_intake()
                 or any(r.hget(f"order:{oid}", "fault") for oid in active_order_ids())):
             return jsonify({'error': '설비 점검 중입니다. 잠시 후 다시 시도해주세요', 'fault': True}), 409
         return view(*args, **kwargs)

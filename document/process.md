@@ -23,7 +23,7 @@
   - 창고가 그 칸에서 `idle`·`busy` 를 올림 (그 칸 + 그 선반 항목)
   - 관리자 `POST /admin/stock/revive` — 칸 되살림과 함께 (응답에 `warehouse_faults_cleared`)
   - 관리자 `POST /admin/warehouse/fault/clear` (body `password`, `fault_section` 선택) — 항목만 지운다. 칸 상태는 그대로. 고장 뒤 `empty` 가 와서 revive 가 409 인 경우용
-- 걸려 있는 동안 새 주문 접수(`POST /order`)만 409. 배정은 막지 않는다 — 고장 칸을 쓰는 주문만 `blockers` 가 뒤로 민다.
+- 새 주문 접수(`POST /order`) 409 는 `keycap_driver_failed`(선반 전체)가 걸려 있을 때만. `keycap_cartridge_failed`(칸 하나)는 접수를 막지 않고 그 칸을 쓰는 조합만 `blockers` 가 막는다. 배정은 어느 쪽도 막지 않는다.
 - `GET /admin/faults` 에 `warehouse_fault` 추가. `/admin/reset` 이 `warehouse:faults` 를 지운다.
 - `agv_fault` 와 저장·조회 코드를 `services/device_fault.py` 로 합쳤다. AGV 는 fault 이름, 창고는 fault_section 을 필드로 쓴다.
 
