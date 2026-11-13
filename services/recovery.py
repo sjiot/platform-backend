@@ -222,6 +222,27 @@ def _restore_agv():
     return {"status": status, "occupancy": occ}
 
 
+def _restore_agv_fault(status):
+    """cnt_agv 최신 보고가 고장(pickup_failed·load_failed…)이면 주문 없는 agv_fault 로 세운다.
+
+    이게 없으면 리셋 뒤 occupancy 만 busy 로 남는다. fault 가 없으니 /admin/faults 에도
+    안 보이고 /admin/agv/fault/clear 도 409 라 배정이 영구히 막힌다 (2026-11-13 실측).
+    _restore_process 뒤에 부른다 — 그 고장이 복구된 주문에 이미 붙어 있으면 겹쳐 세우지 않는다.
+    """
+    from services import agv_fault
+
+    fault = agv_fault.FAULTS.get(status or "")
+    if not fault:
+        return None
+    for sid in STATIONS:
+        oid = r.get(f"{STATION_ORDER_PREFIX}{sid}")
+        if oid and r.hget(f"order:{oid}", "fault_section") == agv_fault.SECTION:
+            logger.info(f"[reset] AGV 고장 {fault} 은 {oid} 에 붙어 있다 — agv_fault 생략")
+            return None
+    agv_fault.add(fault)
+    return fault
+
+
 def _dispensed_keycaps(order_id):
     """cnt_keycap_dispense 최근 CIN 에서 이 주문이 이미 뽑은 키캡 목록.
 
@@ -387,6 +408,7 @@ def reset(mode="zero", keep_queue=False, reset_seq=False, flush_unknown=False):
         report["stock"] = _restore_stock()
         report["agv"] = _restore_agv()
         report["process"] = _restore_process()
+        report["agv"]["fault"] = _restore_agv_fault(report["agv"].get("status"))
 
     # 머신에 새 스냅샷을 알린다. zero 면 '진행 중 주문 없음'이 나간다.
     # process:last 를 지웠으므로 내용이 같아도 반드시 한 번은 나간다.
