@@ -305,10 +305,10 @@ def _restore_process():
     snap = get_latest_con("cnt_process")
     if not snap:
         logger.warning("[reset] cnt_process 를 못 읽었다 — 진행 중 주문 없음으로 둔다")
-        return {"seq": None, "orders": [], "faulted": []}
+        return {"seq": None, "orders": [], "faulted": [], "skipped": []}
 
     now = datetime.now(KST).isoformat()
-    orders, faulted = [], []
+    orders, faulted, skipped = [], [], []
 
     for oid, o in (snap.get("orders") or {}).items():
         if not isinstance(o, dict):         # {"open": true} — 진행 주문 없음 표시 (process._build_body)
@@ -317,6 +317,14 @@ def _restore_process():
         sid = str(o.get("station_id") or "")
         if not stage or stage not in STAGE_ORDER:
             logger.warning(f"[reset] {oid} 알 수 없는 status={stage} — 건너뜀")
+            continue
+        if stage == "completed":
+            # 끝난 주문이다. 완료 push 뒤 release_station 은 따로 push 하지 않아서(dispatch.release_station)
+            # 마지막 주문이 끝나면 cnt_process 최신값에 completed 로 남는다. 되살리면 조립대가 busy 로
+            # 잡히는데 finish_order 는 TERMINAL 을 무시하고 abort 는 409 라 다시 리셋하기 전엔 못 푼다.
+            # 조립대는 _wipe 뒤의 idle 로 둔다.
+            logger.info(f"[reset] {oid} 이미 completed — 복구 생략 (조립대 {sid or '-'} idle 유지)")
+            skipped.append(oid)
             continue
 
         mapping = {
@@ -368,8 +376,8 @@ def _restore_process():
         cur = int(r.get("process:seq") or 0)
         r.set("process:seq", max(seq, cur))
     logger.info(f"[reset] cnt_process 복구 seq={seq} 주문 {len(orders)}건 "
-                f"(fault {len(faulted)}건)")
-    return {"seq": seq, "orders": orders, "faulted": faulted}
+                f"(fault {len(faulted)}건, completed 생략 {len(skipped)}건)")
+    return {"seq": seq, "orders": orders, "faulted": faulted, "skipped": skipped}
 
 
 # ───────────────────────────────────────────────────────────── 진입점
@@ -410,10 +418,11 @@ def reset(mode="zero", keep_queue=False, reset_seq=False, flush_unknown=False):
         report["process"] = _restore_process()
         report["agv"]["fault"] = _restore_agv_fault(report["agv"].get("status"))
 
-    # 머신에 새 스냅샷을 알린다. zero 면 '진행 중 주문 없음'이 나간다.
-    # process:last 를 지웠으므로 내용이 같아도 반드시 한 번은 나간다.
-    # reset=True — open 키 없는 빈 orders 가 머신에게 '리셋'이다 (process._build_body).
-    report["pushed"] = push_process(reset=True)
+    # 머신에 새 스냅샷을 알린다. process:last 를 지웠으므로 내용이 같아도 반드시 한 번은 나간다.
+    # zero·hard 는 reset=True — open 키 없는 빈 orders 가 머신에게 '하드 리셋'이다 (process._build_body).
+    # mobius 는 reset=False — 장비 상태는 그대로 두고 백엔드만 맞추는 모드다. 진행 주문이 없어도
+    # {"open": true} 로 나가 창고가 재고를 초기화하지 않는다 (Redis 재고는 Mobius 실제 수량으로 복구했다).
+    report["pushed"] = push_process(reset=(mode != "mobius"))
 
     # 큐를 보존했으면 배정을 다시 시도한다 — 자리가 비어 있을 수 있다.
     if keep_queue:

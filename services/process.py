@@ -246,8 +246,9 @@ def _build_body(reset=False):
 
     진행 주문이 없으면 orders 안에 "open": true 를 싣는다 — {"orders": {"open": true}}.
     머신은 orders 가 {} 이면 하드 리셋하므로, 중단(abort)·완료로 주문이 다 빠진 것과
-    관리자 리셋을 이 키로 가른다. orders 가 {} 로 나가는 건 POST /admin/reset 의
-    push(reset=True) 한 번뿐이다. 주문이 있으면 open 은 싣지 않는다.
+    관리자 리셋을 이 키로 가른다. orders 가 {} 로 나가는 건 POST /admin/reset 의 zero·hard 모드
+    push(reset=True) 한 번뿐이다 — mobius 모드는 장비를 리셋하지 않으므로 open 을 싣는다.
+    주문이 있으면 open 은 싣지 않는다.
     orders 를 읽는 쪽은 값이 dict 가 아닌 키(OPEN_KEY)를 건너뛰어야 한다
     (recovery._restore_process · snapshot).
     스냅샷은 전량이라 중단 API 에서만 실으면 안 된다 — 다음 push(재고 콜백 등)가 open 없이
@@ -298,7 +299,7 @@ def push_process(periodic=False, reset=False):
     periodic=True 는 주기 재전송용 — 내용이 그대로면 seq를 유지한 채 다시 올린다.
     수신측의 'seq 같으면 무시' 필터가 여기서 작동한다.
 
-    reset=True 는 POST /admin/reset 전용 — 주문이 없어도 open 을 싣지 않는다 (_build_body).
+    reset=True 는 POST /admin/reset 의 zero·hard 전용 — 주문이 없어도 open 을 싣지 않는다 (_build_body).
     """
     body = _build_body(reset=reset)
     fingerprint = json.dumps(body, sort_keys=True, ensure_ascii=False)
