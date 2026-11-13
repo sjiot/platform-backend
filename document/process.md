@@ -1,5 +1,36 @@
 # 작업 내역
 
+## 2026-11-13 관리자 중단 뒤 AGV 가 대기 중이면 바로 배정
+
+**수정 파일:** `services/archive.py`, `services/dispatch.py`(주석), `routes/admin.py`(문서), `tests/test_abort.py`, `tests/test_pickup_gate.py`, `tests/sim.py`(신규 가상 라인 시뮬레이터, git 추적 제외)
+
+### 변경 전
+
+- 중단(`POST /admin/order/<id>/abort`)은 자원만 풀고 배정을 부르지 않았다. 다음 배정은 정상 트리거에 맡겼다.
+- 가상 테스트에서 교착을 찾았다. 대기열 3건이 꽉 찬 채 창고 구간 주문을 중단하면 창고·조립대·AGV 가 다 비어 있어도 대기 주문이 배정되지 않았다. 트리거 중 `POST /order` 는 대기열 초과 409 로 먼저 빠지고, AGV 는 이미 parked 라 보고가 다시 오지 않는다. `/admin/reset` 말고는 풀 길이 없었다.
+
+### 변경 후
+
+| 중단 시점 `agv:occupancy` | 처리 |
+|---|---|
+| `idle` (대기장소) | 자원을 푼 뒤 바로 `try_assign_next()` |
+| `busy` (배송·복귀 중) | 부르지 않는다. AGV 가 올리는 `parked` 에서 배정 |
+
+- `unclaimed` 강제 해제 갈래도 같다. 폐기 보고가 유실된 경우라 AGV 는 대개 이미 parked 다.
+- 배정 게이트(창고 idle·픽업대 비움·AGV 고장 아님·빈 조립대)는 그대로다. AGV 고장 보고가 남아 있으면 idle 이어도 배정되지 않는다.
+- 응답 `assigned_next` 에 새로 배정된 주문이 실린다. `action` 끝에 배정 결과(바로 배정 / parked 대기 / 조건 불충족)를 붙인다.
+- `idle` 은 parked 에서 loaded 까지다. 대기장소 → 픽업대 이동 중에도 idle 로 읽힌다 (그 사이 보고가 없다).
+
+### 확인 결과
+
+- 전체 테스트 통과 (가짜 Redis·Mobius 기준, 신규·수정 5건).
+- 가상 라인(`python -m tests.sim`, 대기열 꽉 참 · 주문 15건 연속 · 정상 4 + 이상 11): 수정 전후 모두 중간 강제종료 0건 (100회 1,500건). 관리자가 fault 를 안 풀어 중단이 49번 나는 조건 10회에서 라인 정지 0건 (수정 전 3건).
+- 실제 장비 확인 전.
+
+### 남은 일
+
+- [ ] 운영 절차: 창고 구간·픽업대 중단은 벨트·픽업대를 치운 **뒤에** 누를 것 (AGV 가 대기 중이면 바로 다음 주문이 시작된다)
+
 ## 2026-11-12 주문 없는 창고 고장을 cnt_process warehouse_fault 로 보고
 
 **수정 파일:** `services/device_fault.py`(신규), `services/warehouse_fault.py`(신규), `services/agv_fault.py`, `callbacks/warehouse.py`, `services/process.py`, `routes/order.py`, `routes/admin.py`, `services/recovery.py`, `config.py`, `tests/test_warehouse_fault.py`(신규, git 추적 제외)

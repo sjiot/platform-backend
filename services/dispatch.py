@@ -10,8 +10,9 @@
 후자는 주문에 붙은 AGV 고장을 관리자가 '중단'으로 끝낸 경우다. 주문은 끝났어도 AGV는
 아직 멈춰 있으므로, 다음 정상 보고(parked 등)가 와야 배정이 이어진다.
 
-관리자 중단(services/archive.abort_order)은 자원만 풀고 **배정을 부르지 않는다.**
-창고·AGV가 실제로 멈췄는지 소프트웨어는 모른다. 다음 배정은 아래 정상 트리거에서 일어난다.
+관리자 중단(services/archive.abort_order)은 자원을 푼 뒤 **AGV 가 대기장소(idle)일 때만** 배정을 부른다.
+AGV 가 busy 면 복귀하며 올리는 parked 가 배정을 부르므로 기다린다. idle 인데 부르지 않으면
+남는 트리거가 없다 — 대기열이 꽉 차 POST /order 도 409 로 빠져 대기 주문이 영영 서 있었다.
 
 픽업대 게이트는 창고가 AGV보다 최대 한 주문만 앞서가게 한다. 창고는 pickup_reached 에서
 풀리지만, 그 트레이를 AGV가 싣는(loaded) 순간까지 다음 주문은 창고로 넘어가지 않는다 —
@@ -32,7 +33,8 @@ idle CIN 하나만 유실돼도(주문당 카트리지 콜백이 10건) 그 칸�
     loaded                         픽업대가 비었음                  callbacks/agv.py
     parked                         (무해한 재시도)                  callbacks/agv.py
     completed / unclaimed          조립대가 비었음                  routes/station.py · watchdog
-                                   (관리자 중단은 제외 — 위 설명)
+    관리자 중단                     창고·조립대가 비었음             services/archive.py
+                                   (AGV idle 일 때만 — 위 설명)
     카트리지 정상 복귀              막혀 있던 주문이 풀림            callbacks/warehouse.py
 """
 import json

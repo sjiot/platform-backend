@@ -371,10 +371,11 @@ def admin_abort_order(order_id):
 
       **창고 구간(assigned~board_packed)은 벨트 위 트레이·부품을 사람이 먼저 치운 뒤에 누른다.**
 
-      **중단은 다음 주문을 배정하지 않는다.** 자원만 풀고, 다음 배정은 평소처럼
-      pickup_reached·loaded·parked·조립대 완료·새 주문 접수 때 게이트(창고 idle·픽업대 비움·
-      AGV 고장 아님·빈 조립대)를 통과하면 일어난다. AGV 가 고장 보고(pickup_failed 등) 뒤
-      멈춰 있으면 parked 가 오거나 /admin/agv/fault/clear 로 풀 때까지 배정되지 않는다.
+      **다음 주문 배정은 AGV 상태로 갈린다.** AGV 가 대기장소에 있으면(agv:occupancy idle) 자원을
+      푼 뒤 바로 배정을 시도하고, 배송·복귀 중(busy)이면 AGV 가 parked 를 올릴 때 배정된다.
+      어느 쪽이든 평소 게이트(창고 idle·픽업대 비움·AGV 고장 아님·빈 조립대)를 통과해야 한다.
+      AGV 가 고장 보고(pickup_failed 등) 뒤 멈춰 있으면 parked 가 오거나
+      /admin/agv/fault/clear 로 풀 때까지 배정되지 않는다. 결과는 assigned_next·action 에 실린다.
 
       | stage | 처리 |
       |---|---|

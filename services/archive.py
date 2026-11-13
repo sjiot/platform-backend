@@ -18,7 +18,8 @@ import json
 import time
 from datetime import datetime
 
-from config import (ARCHIVE_PREFIX,
+from config import (AGV_KEY,
+                    ARCHIVE_PREFIX,
                     ARCHIVE_TTL,
                     DEADLINE_KEY,
                     DISCARD_TIMEOUT_SEC,
@@ -183,7 +184,7 @@ _COLLECTOR_SLOTS = ("keycap", "board", "keycap_pack")
 
 _ABORT_ACTION = {
     "queued": "대기열에서 뺐다. 할 일 없음",
-    "warehouse": "벨트·트레이 위 부품을 사람이 치웠는지 확인 — 다음 배정 시점에 창고가 다음 주문을 시작한다",
+    "warehouse": "벨트·트레이 위 부품을 사람이 치웠는지 확인",
     "pickup_reached": "픽업대 트레이를 사람이 회수",
     "discard": "AGV 가 폐기장소로 가는지 확인. discarded 가 오면 조립대가 풀린다 (안 오면 300초 뒤 워치독이 강제 해제)",
     "removed": "트레이를 사람이 회수했다고 보고 끝냈다",
@@ -200,6 +201,27 @@ def _clear_scratch(order_id):
     collector.reset_gate(order_id)
 
 
+def _assign_after_abort():
+    """중단 뒤 배정 — AGV 가 대기장소에 있을(idle) 때만 바로 부른다. (배정된 주문, 안내 문구)
+
+    AGV 가 busy 면 부르지 않는다. 언젠가 parked 가 오고 그 콜백이 try_assign_next 를 부른다
+    (callbacks/agv.py). AGV 가 idle 이면 그 트리거가 다시 오지 않는다 — 대기열이 꽉 차
+    POST /order 도 409 로 빠지면 대기 주문이 영영 배정되지 않았다 (가상 테스트 tests/sim.py 에서 확인).
+
+    idle 은 agv:occupancy 다. parked 에서 idle, loaded 에서 busy 가 되므로 대기장소 → 픽업대
+    이동 중에도 idle 로 읽힌다 (그 사이 보고가 없다). 창고·픽업대·조립대·AGV 고장 게이트는
+    try_assign_next 가 그대로 본다 — AGV 고장 보고가 남아 있으면 idle 이어도 배정되지 않는다.
+    """
+    from services.dispatch import try_assign_next
+
+    if r.get(AGV_KEY) != "idle":
+        return None, "AGV 가 복귀(parked)하면 다음 주문이 배정된다"
+    assigned = try_assign_next()
+    if assigned:
+        return assigned, f"AGV 대기 중이라 다음 주문 {assigned} 를 바로 배정했다"
+    return None, "AGV 는 대기 중이지만 배정 조건이 안 맞아 대기 (재고·픽업대·AGV 고장·빈 조립대)"
+
+
 def abort_order(order_id, discard=True):
     """관리자가 주문 하나만 끝낸다. fault 해제(그 자리에서 이어가기)와 라인 전체 리셋 사이의 길.
 
@@ -207,7 +229,7 @@ def abort_order(order_id, discard=True):
 
       queued                    대기열에서 빼고 아카이브만. 잡은 자원이 없다
       assigned ~ board_packed   **벨트 위 트레이·부품을 사람이 먼저 치운 뒤에 부른다.**
-                                창고는 풀지만 배정은 부르지 않는다. 다음 정상 트리거에서 이어진다
+                                창고를 풀고, AGV 가 대기 중이면 다음 주문이 바로 배정된다
       pickup_reached            픽업대 트레이를 사람이 회수 (워치독 pickup_reached 마감과 같은 처리)
       loaded · arrived          discard=True(기본)  → unclaimed 로 끝낸다. AGV 가 폐기하고
                                                      discarded 를 올리면 조립대가 풀린다 (노쇼와 같은 길)
@@ -225,8 +247,9 @@ def abort_order(order_id, discard=True):
     장비 상태다 — 장비를 고쳐 정상 status 가 올라오면 콜백이 푼다 (callbacks/warehouse.py).
     고쳤다는 걸 사람이 선언하는 길은 fault/clear 다.
 
-    중단은 배정을 부르지 않는다. 다음 배정은 정상 트리거(services/dispatch.py 주석)에서 일어난다.
-    assigned_next 는 호환용으로 남긴 필드라 보통 빈 목록이다.
+    배정은 AGV 상태로 갈린다 (_assign_after_abort). AGV 가 대기장소(idle)면 바로 배정을 시도하고,
+    busy 면 부르지 않는다 — AGV 가 복귀하며 올리는 parked 에서 배정된다.
+    assigned_next 는 이 중단으로 새로 배정된 주문 (없으면 빈 목록).
 
     없는 주문은 LookupError, 이미 끝난 주문은 ValueError.
     """
@@ -256,10 +279,12 @@ def abort_order(order_id, discard=True):
         r.hdel(key, "fault", "fault_section")
         release_station_after_discard(order_id, assign=False)
         _clear_scratch(order_id)
+        # 폐기 보고가 유실된 경우라 AGV 는 이미 parked 일 가능성이 높다 — 그러면 남은 트리거가 없다
+        _, note = _assign_after_abort()
         push_process()
-        logger.warning(f"[abort] {order_id} unclaimed — 폐기 보고 없이 조립대 {sid} 강제 해제")
+        logger.warning(f"[abort] {order_id} unclaimed — 폐기 보고 없이 조립대 {sid} 강제 해제 · {note}")
         return {**result, "final_stage": "unclaimed", "assigned_next": _newly_assigned(),
-                "action": _ABORT_ACTION["force_release"]}
+                "action": f"{_ABORT_ACTION['force_release']} — {note}"}
 
     from services.recovery import WAREHOUSE_STAGES
 
@@ -277,18 +302,19 @@ def abort_order(order_id, discard=True):
         final, action = "completed", "station"
 
     r.lrem(QUEUE_KEY, 0, order_id)           # queued 가 아니면 아무 일도 없다
-    # 배정은 부르지 않는다 — 창고·AGV가 실제로 멈췄는지 모른다. 다음 정상 트리거
-    # (pickup_reached·loaded·parked·조립대 완료·새 주문)에서 평소 게이트로 배정된다.
+    # 자원 해제에서는 배정하지 않는다 — fault·collector 를 치운 뒤 AGV 상태를 보고 아래에서 부른다
     finish_order(order_id, final, reason=ABORT_REASON, assign=False)
 
     # finish_order 가 fault 를 아카이브에 옮겨 적은 뒤에 지운다
     r.hdel(key, "fault", "fault_section")
     _clear_scratch(order_id)
 
+    _, note = _assign_after_abort()
+
     # 자원 해제 뒤 배정이 안 되면 아무도 push 하지 않아서 스냅샷에 이 주문이 completed 로 남는다
     # (dispatch.release_station 주석). 중단은 명시적으로 지운다. 내용이 같으면 push 는 안 나간다.
     push_process()
 
-    logger.warning(f"[abort] {order_id} {stage} -> {final} (fault={fault}, discard={discard})")
+    logger.warning(f"[abort] {order_id} {stage} -> {final} (fault={fault}, discard={discard}) · {note}")
     return {**result, "final_stage": final, "assigned_next": _newly_assigned(),
-            "action": _ABORT_ACTION[action]}
+            "action": f"{_ABORT_ACTION[action]} — {note}"}
