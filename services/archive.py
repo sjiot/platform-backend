@@ -222,6 +222,42 @@ def _assign_after_abort():
     return None, "AGV 는 대기 중이지만 배정 조건이 안 맞아 대기 (재고·픽업대·AGV 고장·빈 조립대)"
 
 
+def _carry_warehouse_faults(order_id, od):
+    """중단하는 주문에 붙어 있던 창고 고장을 주문 없는 warehouse_fault 로 옮긴다. 옮긴 section 목록.
+
+    주문 fault 는 중단과 함께 cnt_process 에서 사라지는데 칸은 여전히 disable 이다. 옮기지 않으면
+    창고에는 고장이 중단 시점에 풀린 것으로 보이고, 나중에 관리자가 /admin/stock/revive 로
+    '고쳤다'고 해도 스냅샷 내용이 그대로라 push 가 생략된다 (실측 11/13 22:37 E_b·S_y).
+
+    주문 해시의 fault 는 한 칸뿐이라 연달아 죽은 칸은 앞엣것이 덮여 있다 (E_b 위에 S_y).
+    그래서 fault_section 이 아니라 **이 주문이 쓰는 키캡 칸의 현재 상태**로 고른다.
+    선반이 driver_failed 면 선반 항목 하나, 아니면 disable 칸마다 칸 항목 — 콜백의 갈래와 같다
+    (callbacks/warehouse.py::on_cartridge_status 끝).
+    """
+    from services import stock, warehouse_fault
+
+    if not (od.get("fault_section") or "").startswith("keycap_cartridge"):
+        return []
+
+    dead_shelves = stock.driver_failed_shelves()
+    moved = []
+    for slot in stock.parts_of(order_id, "keycap"):
+        s = stock.get(slot) or {}
+        shelf = stock.shelf_of(slot)
+        if shelf in dead_shelves:
+            fault, section = "keycap_driver_failed", stock.section_of(slot, shelf_only=True)
+        elif s.get("status") == "disable":
+            fault, section = "keycap_cartridge_failed", stock.section_of(slot)
+        else:
+            continue
+        if section not in moved:
+            warehouse_fault.add(fault, section)
+            moved.append(section)
+    if moved:
+        logger.warning(f"[abort] {order_id} 창고 고장을 주문 없는 고장으로 옮김 {moved}")
+    return moved
+
+
 def abort_order(order_id, discard=True):
     """관리자가 주문 하나만 끝낸다. fault 해제(그 자리에서 이어가기)와 라인 전체 리셋 사이의 길.
 
@@ -246,6 +282,8 @@ def abort_order(order_id, discard=True):
     재고 칸 status·선반 차단(warehouse:driver_failed)은 건드리지 않는다. 그건 주문이 아니라
     장비 상태다 — 장비를 고쳐 정상 status 가 올라오면 콜백이 푼다 (callbacks/warehouse.py).
     고쳤다는 걸 사람이 선언하는 길은 fault/clear 다.
+    대신 창고 고장이 붙어 있던 주문이면 아직 disable 인 칸을 warehouse_fault 로 옮긴다
+    (_carry_warehouse_faults) — cnt_process 에 고장이 남아야 revive 때 null 로 풀려 나간다.
 
     배정은 AGV 상태로 갈린다 (_assign_after_abort). AGV 가 대기장소(idle)면 바로 배정을 시도하고,
     busy 면 부르지 않는다 — AGV 가 복귀하며 올리는 parked 에서 배정된다.
@@ -302,6 +340,11 @@ def abort_order(order_id, discard=True):
         final, action = "completed", "station"
 
     r.lrem(QUEUE_KEY, 0, order_id)           # queued 가 아니면 아무 일도 없다
+    # 주문 해시를 지우기 전에 — 칸 목록은 주문 해시에서 읽는다
+    moved = _carry_warehouse_faults(order_id, od)
+    if moved:
+        result["warehouse_fault_moved"] = moved
+
     # 자원 해제에서는 배정하지 않는다 — fault·collector 를 치운 뒤 AGV 상태를 보고 아래에서 부른다
     finish_order(order_id, final, reason=ABORT_REASON, assign=False)
 
