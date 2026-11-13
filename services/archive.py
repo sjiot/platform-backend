@@ -258,6 +258,27 @@ def _carry_warehouse_faults(order_id, od):
     return moved
 
 
+def _carry_agv_fault(order_id, od):
+    """중단하는 주문에 붙어 있던 AGV 고장을 주문 없는 agv_fault 로 옮긴다. 옮긴 fault 이름 또는 None.
+
+    주문 fault 만 지우면 agv:status(pickup_failed…)는 남아서 dispatch 게이트가 배정을 막는데
+    cnt_process·/admin/faults 에는 아무 고장도 안 보인다 (실측 11/13 22:50 ord_b9e54d0f 중단 뒤
+    대기열 3건 정지). AGV 가 아직 고장 보고 상태일 때만 옮긴다 — 정상 보고가 이미 왔으면 풀린 것이다.
+    옮긴 항목은 AGV 의 다음 정상 보고(callbacks/agv.py)나 /admin/agv/fault/clear 로 풀린다.
+    """
+    from config import AGV_STATUS_KEY
+    from services import agv_fault
+
+    fault = od.get("fault")
+    if not fault or od.get("fault_section") != agv_fault.SECTION:
+        return None
+    if r.get(AGV_STATUS_KEY) not in agv_fault.FAULTS:
+        return None
+    agv_fault.add_carried(fault)
+    logger.warning(f"[abort] {order_id} AGV 고장 {fault} 을 주문 없는 고장으로 옮김")
+    return fault
+
+
 def abort_order(order_id, discard=True):
     """관리자가 주문 하나만 끝낸다. fault 해제(그 자리에서 이어가기)와 라인 전체 리셋 사이의 길.
 
@@ -314,6 +335,9 @@ def abort_order(order_id, discard=True):
         held = bool(sid) and r.get(f"{STATION_ORDER_PREFIX}{sid}") == order_id
         if not held:
             raise ValueError("이미 끝났고 조립대도 풀린 주문입니다")
+        moved_agv = _carry_agv_fault(order_id, od)
+        if moved_agv:
+            result["agv_fault_moved"] = moved_agv
         r.hdel(key, "fault", "fault_section")
         release_station_after_discard(order_id, assign=False)
         _clear_scratch(order_id)
@@ -344,6 +368,9 @@ def abort_order(order_id, discard=True):
     moved = _carry_warehouse_faults(order_id, od)
     if moved:
         result["warehouse_fault_moved"] = moved
+    moved_agv = _carry_agv_fault(order_id, od)
+    if moved_agv:
+        result["agv_fault_moved"] = moved_agv
 
     # 자원 해제에서는 배정하지 않는다 — fault·collector 를 치운 뒤 AGV 상태를 보고 아래에서 부른다
     finish_order(order_id, final, reason=ABORT_REASON, assign=False)

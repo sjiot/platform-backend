@@ -143,6 +143,11 @@ def on_agv(con):
     if status:
         r.set(AGV_STATUS_KEY, status)
 
+    # 중단한 주문에서 옮겨 온 AGV 고장은 정상 보고 하나로 풀린다 (services/archive._carry_agv_fault).
+    if status and status not in FAULTS and agv_fault.clear_carried():
+        logger.info(f"[agv] 정상 보고 {status} — 중단 주문에서 옮겨 온 AGV 고장 해제")
+        push_process()
+
     if status == "parked":
         # agv:occupancy 가 idle 이 되는 지점은 여기 하나뿐이다.
         r.set(AGV_KEY, "idle")

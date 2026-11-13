@@ -36,6 +36,20 @@ def add(fault):
     _faults.add(fault, SECTION, field=fault)
 
 
+# 중단(abort)한 주문에서 옮겨 온 고장. 원래 주문 fault 였으므로 예전처럼 AGV 의 정상 보고로도
+# 풀린다 (dispatch 게이트가 agv:status 만 보던 시절과 같은 동작). 관리자 해제로도 풀린다.
+_CARRIED = "abort:"
+
+
+def add_carried(fault):
+    _faults.add(fault, SECTION, field=_CARRIED + fault)
+
+
+def clear_carried():
+    """옮겨 온 고장만 지운다. 지운 field 목록. push 는 호출부가 한다."""
+    return _faults.remove([f for f in (r.hkeys(AGV_FAULT_KEY) or []) if f.startswith(_CARRIED)])
+
+
 def clear_status_if_fault():
     """agv:status 가 고장 보고(load_failed…)로 남아 있으면 지운다. 해제 뒤에도 고장으로 보이지 않게.
 
