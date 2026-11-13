@@ -84,6 +84,14 @@ def check(r):
     if cur and not r.exists(f"order:{cur}"):
         fail(f"warehouse:current_order={cur} 인데 그 주문 해시가 없다")
 
+    # 7-1. 픽업대 트레이는 1개뿐이다. 둘이면 배정 게이트(dispatch.pickup_occupied)가
+    #      뚫린 것이고, AGV 가 어느 트레이를 실을지 모른다 (callbacks/agv.py 대상 모호)
+    at_pickup = [r.get(f"{STATION_ORDER_PREFIX}{sid}") for sid in STATIONS]
+    at_pickup = [oid for oid in at_pickup
+                 if oid and r.hget(f"order:{oid}", "stage") == "pickup_reached"]
+    if len(at_pickup) > 1:
+        fail(f"픽업대에 주문이 {len(at_pickup)}건 — {at_pickup}")
+
     # 8. 선반 차단 키에 모르는 값이 들어가면 blockers 가 영원히 못 푼다
     for shelf in (r.hkeys(stock.DRIVER_KEY) or []):
         if shelf not in stock.SHELVES:

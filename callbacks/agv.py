@@ -149,7 +149,7 @@ def on_agv(con):
         logger.info("[agv] 대기장소 복귀 — idle")
         # AGV가 자유로워졌다 → 픽업대에서 기다리던 주문의 시계를 새로 건다.
         watchdog.rearm_pickup_waiters()
-        # AGV 게이트가 풀렸다 → AGV 배송 중이라 막혀 있던 배정을 다시 시도한다.
+        # 배정은 loaded(픽업대 비움)에서 풀린다. 여기선 놓친 트리거를 줍는 재시도일 뿐이다.
         from services.dispatch import try_assign_next
         try_assign_next()
         return
@@ -232,3 +232,9 @@ def on_agv(con):
         r.hset(f"order:{order_id}", "arrived_at", datetime.now(KST).isoformat())
 
     set_stage(order_id, next_stage)
+
+    if status == "loaded":
+        # 트레이가 픽업대를 떠났다 → 픽업대 게이트가 풀렸다. 다음 주문을 창고로 넘긴다.
+        # set_stage 뒤에 불러야 pickup_occupied() 가 이 주문을 더는 안 센다.
+        from services.dispatch import try_assign_next
+        try_assign_next()

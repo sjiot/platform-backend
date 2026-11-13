@@ -2,32 +2,35 @@
 
 배정 게이트 넷.
     1. 창고가 비었나        warehouse:occupancy == idle   (주문 1건씩 처리)
-    2. AGV가 대기장소에 있나 agv:occupancy == idle        (parked 보고로만 idle 이 된다)
+    2. 픽업대가 비었나      pickup_reached 주문이 없다     (트레이를 AGV가 실어 가야 다음 주문)
     3. 조립대 빈 칸이 있나   station:current_order:{1,2,3}
     4. 이 주문이 쓰는 카트리지 5칸이 멀쩡한가   stock.blockers()
+그 밖에 주문 없는 AGV 고장(agv_fault)이 걸려 있으면 배정하지 않는다.
 
-AGV 게이트는 창고가 AGV보다 최대 한 주문만 앞서가게 한다. agv:occupancy 는 loaded 에서
-busy, parked 에서 idle 이 되므로 —
-    주문1 pickup_reached, AGV parked  → 주문2 배정 (AGV는 곧 주문1을 집으러 간다)
-    주문2 pickup_reached, AGV 배송 중 → 막힘. 창고는 idle 로 대기
-    AGV parked                        → 주문3 배정, AGV는 픽업대의 주문2를 집으러 간다
-픽업대에 트레이가 두 개 쌓이지 않는 건, AGV가 parked 직후 픽업대로 가서 싣는 시간이
-창고가 다음 트레이를 픽업대까지 보내는 시간보다 짧다는 전제에 기댄다.
+픽업대 게이트는 창고가 AGV보다 최대 한 주문만 앞서가게 한다. 창고는 pickup_reached 에서
+풀리지만, 그 트레이를 AGV가 싣는(loaded) 순간까지 다음 주문은 창고로 넘어가지 않는다 —
+    주문1 pickup_reached                → 창고 idle, 픽업대가 차 있어 주문2 대기
+    주문1 loaded                        → 주문2 배정 (AGV 배송과 창고 작업이 겹친다)
+    주문2 pickup_reached, AGV 배송 중   → 대기. AGV가 parked 뒤 와서 싣으면(loaded) 주문3 배정
+그래서 픽업대에 트레이가 두 개 쌓이지 않는다. 예전에는 'AGV idle(parked)' 게이트로
+막았는데, 그건 AGV가 창고보다 빨리 픽업대에 온다는 가정에 기댔다.
+픽업대 상태는 따로 키를 두지 않고 stage 로 읽는다 — 리셋·복구 때 어긋날 키가 하나 줄어든다.
 
 카트리지 idle/busy는 게이트로 쓰지 않는다. 창고가 idle이면 카트리지도 idle이어야 하고,
 idle CIN 하나만 유실돼도(주문당 카트리지 콜백이 10건) 그 칸이 영구히 busy로 남아 교착된다.
 
 배정 트리거 — 배정을 막던 조건이 풀리는 지점 전부에서 try_assign_next()를 부른다.
-창고·AGV busy거나 빈 조립대가 없으면 즉시 None으로 빠지므로 값이 싸다.
+막혀 있으면 즉시 None으로 빠지므로 값이 싸다.
     POST /order 접수 직후          큐에 새 주문                    routes/order.py
     pickup_reached                 창고가 비었음 (벨트 비었음)      callbacks/conveyor.py
-    parked                         AGV가 대기장소로 복귀            callbacks/agv.py
+    loaded                         픽업대가 비었음                  callbacks/agv.py
+    parked                         (무해한 재시도)                  callbacks/agv.py
     completed / unclaimed          조립대가 비었음                  routes/station.py · watchdog
     카트리지 정상 복귀              막혀 있던 주문이 풀림            callbacks/warehouse.py
 """
 import json
 
-from config import (QUEUE_KEY, WAREHOUSE_KEY, STATION_KEY, AGV_KEY,
+from config import (QUEUE_KEY, WAREHOUSE_KEY, STATION_KEY,
                     WAREHOUSE_ORDER_KEY, STATION_ORDER_PREFIX)
 from infra.extensions import r
 from infra.logger import logger
@@ -44,12 +47,25 @@ STATIONS = ("1", "2", "3")
 SKIP_BLOCKED = True
 
 
+def pickup_occupied():
+    """픽업대에서 AGV를 기다리는 주문(pickup_reached)이 있나.
+
+    fault(pickup_failed 등)가 걸려 있어도 트레이는 그대로 픽업대에 있으므로 막는다.
+    abort·타임아웃으로 끝나면 stage 가 completed 로 바뀌어 풀린다.
+    """
+    for sid in STATIONS:
+        oid = r.get(f"{STATION_ORDER_PREFIX}{sid}")
+        if oid and r.hget(f"order:{oid}", "stage") == "pickup_reached":
+            return True
+    return False
+
+
 def try_assign_next():
     """큐 앞에서부터 훑어 처음으로 배치 가능한 주문 1건을 배정. 배정했으면 order_id."""
     if r.get(WAREHOUSE_KEY) != "idle" or r.get(WAREHOUSE_ORDER_KEY):
         return None
-    if r.get(AGV_KEY) != "idle":
-        return None                 # AGV 배송 중. parked 보고에서 다시 부른다
+    if pickup_occupied():
+        return None                 # 픽업대에 트레이가 있다. loaded 보고에서 다시 부른다
     if agv_fault.active():
         return None                 # 주문 없는 AGV 고장. 관리자 해제(/admin/agv/fault/clear)에서 다시 부른다
 
@@ -129,7 +145,8 @@ def _rollback(order_id, station_id):
 
 
 def release_warehouse():
-    """pickup_reached — 트레이가 픽업대에 도착해 벨트가 비었다. 다음 주문을 받을 수 있다."""
+    """pickup_reached — 트레이가 픽업대에 도착해 벨트가 비었다.
+    다음 배정은 픽업대 게이트에 막히고, AGV가 싣는(loaded) 순간 풀린다."""
     r.set(WAREHOUSE_KEY, "idle")
     r.delete(WAREHOUSE_ORDER_KEY)
     return try_assign_next()
