@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request
 
 from config import (QUEUE_KEY,
                     AGV_KEY,
+                    AGV_STATUS_KEY,
                     STATION_KEY,
                     STATION_ORDER_PREFIX,
                     WAREHOUSE_ORDER_KEY,
@@ -187,6 +188,9 @@ def clear_agv_fault():
       대상 주문이 없는 AGV 고장(agv_fault)을 전부 해제한다. 관리자 해제로만 풀린다.
       주문에 붙은 AGV fault(orders.{id}.fault)는 /admin/order/{id}/fault/clear 로 푼다.
       해제 뒤 배정·새 주문 접수가 다시 열리고, 대기 주문 배정을 한 번 시도한다.
+
+      주문 없는 고장이 없어도 AGV 마지막 보고(agv:status)가 고장(pickup_failed 등)으로 남아 있으면
+      그것을 지운다. 고장 주문을 '중단'으로 끝낸 뒤 AGV 가 parked 를 안 올려 배정이 막혔을 때 쓴다.
     parameters:
       - in: body
         name: body
@@ -217,11 +221,13 @@ def clear_agv_fault():
     data = request.get_json(silent=True) or {}
     if data.get("password") != STATION_RESET_PASSWORD:
         return jsonify({"error": "비밀번호가 틀렸습니다"}), 400
-    if not agv_fault.active():
+    stale = r.get(AGV_STATUS_KEY) if r.get(AGV_STATUS_KEY) in agv_fault.FAULTS else None
+    if not agv_fault.active() and not stale:
         return jsonify({"error": "주문 없는 AGV 고장이 없습니다"}), 409
 
     cleared = agv_fault.clear()
-    agv_fault.clear_status_if_fault()
+    if agv_fault.clear_status_if_fault() and not cleared and stale:
+        cleared = [agv_fault.FAULTS[stale]]          # 남아 있던 고장 보고만 지웠다
     if data.get("parked"):
         r.set(AGV_KEY, "idle")
     logger.info(f"[admin] AGV 고장 해제 {cleared}" + (" · occupancy idle" if data.get("parked") else ""))
@@ -364,7 +370,11 @@ def admin_abort_order(order_id):
       fault 해제(그 자리에서 이어가기)로 살릴 수 없는 주문 하나를 정리한다. 다른 주문은 건드리지 않는다.
 
       **창고 구간(assigned~board_packed)은 벨트 위 트레이·부품을 사람이 먼저 치운 뒤에 누른다.**
-      창고를 풀면 바로 다음 주문이 배정돼 벨트가 다시 돈다.
+
+      **중단은 다음 주문을 배정하지 않는다.** 자원만 풀고, 다음 배정은 평소처럼
+      pickup_reached·loaded·parked·조립대 완료·새 주문 접수 때 게이트(창고 idle·픽업대 비움·
+      AGV 고장 아님·빈 조립대)를 통과하면 일어난다. AGV 가 고장 보고(pickup_failed 등) 뒤
+      멈춰 있으면 parked 가 오거나 /admin/agv/fault/clear 로 풀 때까지 배정되지 않는다.
 
       | stage | 처리 |
       |---|---|

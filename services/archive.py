@@ -35,7 +35,7 @@ from infra.keys import _touch_order
 from infra.logger import logger
 
 
-def finish_order(order_id, final_stage, reason=None):
+def finish_order(order_id, final_stage, reason=None, assign=True):
     """주문을 끝낸다. stage 전이 → 아카이브 → 자원 해제 순서.
 
     stage 를 먼저 넘기는 이유 — set_stage 가 워치독을 풀고 cnt_process 를 밀어서,
@@ -60,7 +60,7 @@ def finish_order(order_id, final_stage, reason=None):
         r.hset(key, "reason", reason)
     set_stage(order_id, final_stage)                # cnt_process push + 워치독 해제
     _archive(order_id, od, reason)
-    _release_resources(order_id, od, final_stage)
+    _release_resources(order_id, od, final_stage, assign=assign)
 
     if final_stage == "unclaimed":
         # 폐기 마감. set_stage 뒤여야 한다 — unclaimed 는 TERMINAL 이라
@@ -114,7 +114,7 @@ def _archive(order_id, od, reason):
     # 같은 값이 orders:archive:{date} 의 레코드에 전부 들어 있다.
 
 
-def _release_resources(order_id, od, final_stage=None):
+def _release_resources(order_id, od, final_stage=None, assign=True):
     """창고 먼저, 조립대 나중. 각각 다음 배정을 시도한다.
 
     타임아웃으로 끝난 주문은 창고 구간 한복판일 수 있다. 창고를 안 풀면
@@ -129,7 +129,7 @@ def _release_resources(order_id, od, final_stage=None):
     from services.dispatch import release_station, release_warehouse
 
     if r.get(WAREHOUSE_ORDER_KEY) == order_id:
-        release_warehouse()
+        release_warehouse(assign=assign)
 
     if final_stage == "unclaimed":
         return                                   # 조립대는 폐기 완료까지 유지
@@ -138,10 +138,10 @@ def _release_resources(order_id, od, final_stage=None):
     if sid and r.get(f"{STATION_ORDER_PREFIX}{sid}") == order_id:
         r.delete(f"{STATION_VERIFIED_PREFIX}{sid}")
         r.delete(f"{STATION_CALL_PREFIX}{sid}")      # 남기면 다음 사용자가 부른 것처럼 보인다
-        release_station(sid)
+        release_station(sid, assign=assign)
 
 
-def release_station_after_discard(order_id):
+def release_station_after_discard(order_id, assign=True):
     """AGV 가 폐기를 마쳤다 → 잡아 두던 조립대를 푼다.
 
     callbacks/agv.py 의 discarded 분기와 워치독의 폐기 마감, 두 곳에서 부른다.
@@ -168,7 +168,7 @@ def release_station_after_discard(order_id):
     r.delete(f"{STATION_CALL_PREFIX}{sid}")
     _touch_order(order_id, ORDER_DONE_TTL)
     logger.info(f"[finish] {order_id} 폐기 완료 — 조립대 {sid} 해제")
-    return release_station(sid)                  # try_assign_next 까지 돈다
+    return release_station(sid, assign=assign)   # assign 이면 try_assign_next 까지 돈다
 
 # ── 관리자 단건 중단 ─────────────────────────────────────────────────────
 ABORT_REASON = "admin_abort"
@@ -183,7 +183,7 @@ _COLLECTOR_SLOTS = ("keycap", "board", "keycap_pack")
 
 _ABORT_ACTION = {
     "queued": "대기열에서 뺐다. 할 일 없음",
-    "warehouse": "벨트·트레이 위 부품을 사람이 치웠는지 확인 — 창고가 바로 다음 주문을 시작한다",
+    "warehouse": "벨트·트레이 위 부품을 사람이 치웠는지 확인 — 다음 배정 시점에 창고가 다음 주문을 시작한다",
     "pickup_reached": "픽업대 트레이를 사람이 회수",
     "discard": "AGV 가 폐기장소로 가는지 확인. discarded 가 오면 조립대가 풀린다 (안 오면 300초 뒤 워치독이 강제 해제)",
     "removed": "트레이를 사람이 회수했다고 보고 끝냈다",
@@ -207,7 +207,7 @@ def abort_order(order_id, discard=True):
 
       queued                    대기열에서 빼고 아카이브만. 잡은 자원이 없다
       assigned ~ board_packed   **벨트 위 트레이·부품을 사람이 먼저 치운 뒤에 부른다.**
-                                창고를 풀면 바로 다음 주문이 배정돼 벨트가 다시 돈다
+                                창고는 풀지만 배정은 부르지 않는다. 다음 정상 트리거에서 이어진다
       pickup_reached            픽업대 트레이를 사람이 회수 (워치독 pickup_reached 마감과 같은 처리)
       loaded · arrived          discard=True(기본)  → unclaimed 로 끝낸다. AGV 가 폐기하고
                                                      discarded 를 올리면 조립대가 풀린다 (노쇼와 같은 길)
@@ -225,7 +225,8 @@ def abort_order(order_id, discard=True):
     장비 상태다 — 장비를 고쳐 정상 status 가 올라오면 콜백이 푼다 (callbacks/warehouse.py).
     고쳤다는 걸 사람이 선언하는 길은 fault/clear 다.
 
-    assigned_next 는 이 중단으로 자리가 나서 대기열에서 새로 배정된 주문들이다.
+    중단은 배정을 부르지 않는다. 다음 배정은 정상 트리거(services/dispatch.py 주석)에서 일어난다.
+    assigned_next 는 호환용으로 남긴 필드라 보통 빈 목록이다.
 
     없는 주문은 LookupError, 이미 끝난 주문은 ValueError.
     """
@@ -253,14 +254,13 @@ def abort_order(order_id, discard=True):
         if not held:
             raise ValueError("이미 끝났고 조립대도 풀린 주문입니다")
         r.hdel(key, "fault", "fault_section")
-        release_station_after_discard(order_id)
+        release_station_after_discard(order_id, assign=False)
         _clear_scratch(order_id)
         push_process()
         logger.warning(f"[abort] {order_id} unclaimed — 폐기 보고 없이 조립대 {sid} 강제 해제")
         return {**result, "final_stage": "unclaimed", "assigned_next": _newly_assigned(),
                 "action": _ABORT_ACTION["force_release"]}
 
-    from services.dispatch import try_assign_next
     from services.recovery import WAREHOUSE_STAGES
 
     if stage in ABORT_DISCARD_STAGES and discard:
@@ -277,16 +277,13 @@ def abort_order(order_id, discard=True):
         final, action = "completed", "station"
 
     r.lrem(QUEUE_KEY, 0, order_id)           # queued 가 아니면 아무 일도 없다
-    finish_order(order_id, final, reason=ABORT_REASON)
+    # 배정은 부르지 않는다 — 창고·AGV가 실제로 멈췄는지 모른다. 다음 정상 트리거
+    # (pickup_reached·loaded·parked·조립대 완료·새 주문)에서 평소 게이트로 배정된다.
+    finish_order(order_id, final, reason=ABORT_REASON, assign=False)
 
     # finish_order 가 fault 를 아카이브에 옮겨 적은 뒤에 지운다
     r.hdel(key, "fault", "fault_section")
     _clear_scratch(order_id)
-
-    if stage == "queued":
-        # 대기 주문도 재고를 예약한다 (stock.reserved_map). 빠지면 막혀 있던 주문이 풀릴 수 있다.
-        # 나머지 경로는 finish_order 의 자원 해제가 이미 try_assign_next 를 불렀다
-        try_assign_next()
 
     # 자원 해제 뒤 배정이 안 되면 아무도 push 하지 않아서 스냅샷에 이 주문이 completed 로 남는다
     # (dispatch.release_station 주석). 중단은 명시적으로 지운다. 내용이 같으면 push 는 안 나간다.

@@ -5,7 +5,13 @@
     2. 픽업대가 비었나      pickup_reached 주문이 없다     (트레이를 AGV가 실어 가야 다음 주문)
     3. 조립대 빈 칸이 있나   station:current_order:{1,2,3}
     4. 이 주문이 쓰는 카트리지 5칸이 멀쩡한가   stock.blockers()
-그 밖에 주문 없는 AGV 고장(agv_fault)이 걸려 있으면 배정하지 않는다.
+그 밖에 AGV가 고장 상태면 배정하지 않는다 — 주문 없는 고장(agv_fault)이 걸려 있거나,
+마지막 보고(agv:status)가 고장(pickup_failed…)인 채로 parked 가 아직 안 왔을 때.
+후자는 주문에 붙은 AGV 고장을 관리자가 '중단'으로 끝낸 경우다. 주문은 끝났어도 AGV는
+아직 멈춰 있으므로, 다음 정상 보고(parked 등)가 와야 배정이 이어진다.
+
+관리자 중단(services/archive.abort_order)은 자원만 풀고 **배정을 부르지 않는다.**
+창고·AGV가 실제로 멈췄는지 소프트웨어는 모른다. 다음 배정은 아래 정상 트리거에서 일어난다.
 
 픽업대 게이트는 창고가 AGV보다 최대 한 주문만 앞서가게 한다. 창고는 pickup_reached 에서
 풀리지만, 그 트레이를 AGV가 싣는(loaded) 순간까지 다음 주문은 창고로 넘어가지 않는다 —
@@ -26,11 +32,12 @@ idle CIN 하나만 유실돼도(주문당 카트리지 콜백이 10건) 그 칸�
     loaded                         픽업대가 비었음                  callbacks/agv.py
     parked                         (무해한 재시도)                  callbacks/agv.py
     completed / unclaimed          조립대가 비었음                  routes/station.py · watchdog
+                                   (관리자 중단은 제외 — 위 설명)
     카트리지 정상 복귀              막혀 있던 주문이 풀림            callbacks/warehouse.py
 """
 import json
 
-from config import (QUEUE_KEY, WAREHOUSE_KEY, STATION_KEY,
+from config import (QUEUE_KEY, WAREHOUSE_KEY, STATION_KEY, AGV_STATUS_KEY,
                     WAREHOUSE_ORDER_KEY, STATION_ORDER_PREFIX)
 from infra.extensions import r
 from infra.logger import logger
@@ -68,6 +75,8 @@ def try_assign_next():
         return None                 # 픽업대에 트레이가 있다. loaded 보고에서 다시 부른다
     if agv_fault.active():
         return None                 # 주문 없는 AGV 고장. 관리자 해제(/admin/agv/fault/clear)에서 다시 부른다
+    if r.get(AGV_STATUS_KEY) in agv_fault.FAULTS:
+        return None                 # AGV 마지막 보고가 고장. parked 등 정상 보고나 관리자 해제를 기다린다
 
     station_id = _get_free_station()
     if not station_id:
@@ -144,15 +153,16 @@ def _rollback(order_id, station_id):
     # cnt_station push는 _assign 성공 후에만 일어난다. 롤백 시점엔 올린 게 없다.
 
 
-def release_warehouse():
+def release_warehouse(assign=True):
     """pickup_reached — 트레이가 픽업대에 도착해 벨트가 비었다.
-    다음 배정은 픽업대 게이트에 막히고, AGV가 싣는(loaded) 순간 풀린다."""
+    다음 배정은 픽업대 게이트에 막히고, AGV가 싣는(loaded) 순간 풀린다.
+    assign=False 는 관리자 중단 — 풀기만 하고 배정은 다음 정상 트리거에 맡긴다."""
     r.set(WAREHOUSE_KEY, "idle")
     r.delete(WAREHOUSE_ORDER_KEY)
-    return try_assign_next()
+    return try_assign_next() if assign else None
 
 
-def release_station(station_id):
+def release_station(station_id, assign=True):
     """completed / unclaimed — 조립대를 비운다.
 
     배정이 안 되면 cnt_process를 따로 밀지 않는다. set_stage(completed/unclaimed) 시점엔
@@ -162,7 +172,7 @@ def release_station(station_id):
     """
     r.delete(f"{STATION_ORDER_PREFIX}{station_id}")
     r.hset(STATION_KEY, str(station_id), "idle")
-    return try_assign_next()
+    return try_assign_next() if assign else None
 
 
 def on_stock_recovered():
