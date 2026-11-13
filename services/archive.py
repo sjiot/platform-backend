@@ -1,7 +1,7 @@
 """주문 종료 공통 경로 — 아카이브 · 집계 · 자원 해제.
 
 종료 지점이 다섯이다. 전부 여기로 모은다.
-    완료 버튼           routes/station.py  → station_service._complete_station
+    완료 버튼           routes/station.py  /complete (사용자가 누를 때만 — QR 인증 후 자동 완료 없음)
     노쇼(프론트)        routes/station.py  /unclaim
     노쇼(워치독 백업)    services/watchdog.py  arrived 마감
     타임아웃            services/watchdog.py  그 외 stage 마감
@@ -53,7 +53,7 @@ def finish_order(order_id, final_stage, reason=None, assign=True):
     if od.get("stage") in TERMINAL:
         # 끝난 주문을 다시 끝내지 않는다. 특히 unclaimed 는 AGV 폐기 보고까지 조립대를 잡고 있는데
         # (_release_resources), 여기로 completed 가 들어오면 그 조립대가 폐기 전에 풀린다.
-        # 조립대 완료 버튼·조립 타임아웃이 그 경로다 (routes/station.py, station_service._complete_station).
+        # 조립대 완료 버튼이 그 경로다.
         logger.warning(f"[finish] {order_id} 이미 {od.get('stage')} — {final_stage} 요청 무시")
         return None
 

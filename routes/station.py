@@ -20,8 +20,7 @@ from infra.keys import (_order_counter_key,
 from services.order_service import _is_valid_mbti
 from services.station_service import (elapsed_since_arrival,
                                       start_order,
-                                      unclaim_guard,
-                                      check_station_timeouts)
+                                      unclaim_guard)
 
 bp = Blueprint('station', __name__)
 
@@ -203,11 +202,6 @@ def station_unclaim(station_id):
         return jsonify({'error': '아직 부품이 도착하지 않았습니다', 'stage': stage}), 409
     if is_after(stage, "arrived"):
         return jsonify({'error': '이미 처리된 주문입니다', 'stage': stage}), 409
-
-    # QR 인증 후 조립 타임아웃(STATION_TIMEOUT_SEC)을 넘긴 조립대를 여기서 같이 정리한다.
-    # 이 백업 경로는 부르는 곳이 없어서 죽어 있었다. 노쇼 요청은 사람이 조립대 앞에 없다는
-    # 신호라 다른 칸의 방치도 같이 훑기 좋은 시점이다.
-    check_station_timeouts()
 
     # 노쇼로 처리해도 되는 시점인지는 서버가 arrived_at 으로 다시 잰다 (station_service).
     ok, elapsed, remain = unclaim_guard(order_data)

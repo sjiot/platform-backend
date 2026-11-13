@@ -1,5 +1,31 @@
 # 작업 내역
 
+## 2026-11-13 조립 중(verified·received) 자동 완료 제거
+
+**수정 파일:** `services/watchdog.py`, `services/station_service.py`, `routes/station.py`, `routes/admin.py`(문서), `services/archive.py`(주석), `config.py`, `infra/keys.py`, `README.md`, `tests/test_received_no_deadline.py`(신규, git 추적 제외)
+
+### 변경 전
+
+- `received` 500초 마감 → 워치독이 `completed`(reason `timeout`)로 끝냈다. 관리자 호출이 열려 있으면 +180초.
+- QR 인증 후 `STATION_TIMEOUT_SEC`(600초) 지난 조립대를 `completed` 로 끝내는 백업(`check_station_timeouts`)이 있었다. 주기 실행이 아니라 `/unclaim` 요청 때만 돌았고, 서버 로그에 실행 기록은 없다.
+
+### 변경 후
+
+- 조립 중 주문은 사용자 완료(`/station/<sid>/complete`) 또는 관리자 중단(`/admin/order/<id>/abort`)으로만 끝난다.
+- `received` 는 마감을 걸지 않는다. 배포 전에 걸린 `received` 예약은 워치독이 무시한다 (fault 로 떨어지지 않게).
+- `check_station_timeouts`·`_complete_station`·`STATION_TIMEOUT_SEC` 삭제.
+- `verified` 120초 마감(→ `stage_timeout` fault, AGV 하차 미보고)은 그대로다.
+
+### 확인 결과
+
+- 전체 테스트 통과 (신규 3건).
+- 근거: ord_9f1a0cee(접수 23:22 → 종료 23:35)는 대기열 9분 43초 중 조립대 1·2 가 `received` 에서 완료를 안 누른 주문(ord_de7aba40·ord_eb77167a)에 잡혀 있었고, 둘 다 500초 마감으로 풀렸다. 이 변경 뒤에는 관리자가 중단해야 풀린다.
+
+### 남은 일
+
+- [ ] 운영: 완료를 안 누르고 떠난 조립대는 관리자 페이지에서 중단
+
+
 ## 2026-11-13 관리자 중단 뒤 AGV 가 대기 중이면 바로 배정
 
 **수정 파일:** `services/archive.py`, `services/dispatch.py`(주석), `routes/admin.py`(문서), `tests/test_abort.py`, `tests/test_pickup_gate.py`, `tests/sim.py`(신규 가상 라인 시뮬레이터, git 추적 제외)

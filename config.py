@@ -44,7 +44,6 @@ STATION_VERIFIED_PREFIX = os.getenv("STATION_VERIFIED_PREFIX", "station:verified
 # station:occupancy 해시에 필드를 붙이지 않는 이유 — /admin/reset 이 그 해시를
 # hset(mapping={s: "idle"}) 로 덮어써서 늘어난 필드를 지우지 못한다.
 STATION_CALL_PREFIX = os.getenv("STATION_CALL_PREFIX", "station:call:")
-STATION_TIMEOUT_SEC = int(os.getenv("STATION_TIMEOUT_SEC", "600"))  # 10분
 
 # 노쇼(unclaim) 최소 대기 시간. 프론트가 3분 타이머를 돌리지만 그건 클라이언트 값이라
 # 조작하면 도착 직후에도 unclaim을 때릴 수 있다. 서버가 arrived_at으로 다시 잰다.

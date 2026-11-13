@@ -21,7 +21,7 @@ STAGE_TIMEOUT = {
     "loaded": 120,      # AGV 이동 거리에 좌우됨
     "arrived": 300,     # 프론트가 3분에 /unclaim을 친다. 이건 그게 실패했을 때의 백업
     "verified": 120,
-    "received": 500,    # 사용자 조립 시간 → 초과 시 completed 일괄
+    # received(조립 중)는 마감이 없다. 사용자가 완료를 누르거나 관리자가 중단할 때까지 조립대를 잡는다
 }
 
 AGV_EXTEND_SEC = 10
@@ -29,7 +29,6 @@ AGV_EXTEND_SEC = 10
 CALL_EXTEND = {
     "arrived": 180,     # 부품이 제대로 안 왔다 → 노쇼 백업(300s)이 먼저 터지지 않게
     "verified": 180,    # 로봇팔이 트레이를 안 내려준다 (기본 60s 로는 조치할 시간이 없다)
-    "received": 180,    # 조립 중 도움 요청
 }
 
 MAX_CALL_EXTENDS = 2
@@ -108,6 +107,10 @@ def _expire(order_id):
     stage = r.hget(f"order:{order_id}", "stage")
     if stage is None:
         return                                        # TTL로 이미 사라진 주문
+    if stage == "received":
+        # 조립 상한은 없앴다 (사용자 완료 · 관리자 중단으로만 끝난다). 배포 전에 걸린 예약만 여기로 온다
+        logger.info(f"[watchdog] {order_id} received 마감 예약 무시 — 조립 상한 없음")
+        return
 
     if stage in ("assigned", "keycap_mismatched"):
         logger.error(f"[watchdog] {order_id} {stage} 마감 — "
@@ -123,8 +126,6 @@ def _expire(order_id):
         release_station_after_discard(order_id)
     elif stage == "arrived":
         finish_order(order_id, "unclaimed", reason="unclaimed")   # 노쇼 백업 경로
-    elif stage == "received":
-        finish_order(order_id, "completed", reason="timeout")     # 조립 타임아웃
     elif stage == "pickup_reached":
         # 연장을 다 쓰고 내려온 경우에만 여기 온다. AGV가 돌아올 가망이 없다고 본 것이므로
         # 종료는 하되 'AGV 때문에 끝났다'는 사실은 아카이브에 남긴다.

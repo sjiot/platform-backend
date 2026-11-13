@@ -383,7 +383,7 @@ def admin_abort_order(order_id):
       | assigned ~ board_packed | completed — 창고·조립대 해제 |
       | pickup_reached | completed — 픽업대 트레이는 사람이 회수 |
       | loaded · arrived | discard=true(기본) → unclaimed, AGV 가 폐기 후 조립대 해제 / false → completed (사람이 회수) |
-      | verified · received | completed |
+      | verified · received | completed (received 는 자동 종료가 없어 중단이 유일한 관리자 종료 수단) |
       | unclaimed | 폐기 보고를 기다리지 않고 조립대 강제 해제 |
       | completed | 409 |
 
