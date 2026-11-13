@@ -18,6 +18,10 @@ FAULTS = {
     "load_failed": "pickup_failed",
     "unload_failed": "drop_failed",
     "agv_broken": "agv_broken",
+    # AGV 는 fault 이름을 status 로 그대로 싣는다 (2026-11-12 실측: status=pickup_failed).
+    # 명세 이름(load_failed·unload_failed)과 둘 다 받는다.
+    "pickup_failed": "pickup_failed",
+    "drop_failed": "drop_failed",
 }
 
 SECTION = "agv"
