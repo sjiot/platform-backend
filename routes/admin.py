@@ -131,6 +131,7 @@ def _get_archived_orders_today():
             "colors": colors,
             "stage": record.get("ended_at_stage") or record.get("final_status"),
             "fault": record.get("fault") or None,
+            "fault_section": record.get("fault_section") or None,   # 종료 주문 fault 의 위치 (관리자 창고 상태 도면)
             "station_id": record.get("station_id"),
             "order_seq": _to_int(record.get("order_seq")),
             "created_at": record.get("created_at"),
@@ -138,6 +139,33 @@ def _get_archived_orders_today():
             "reason": record.get("reason"),
         })
     return orders
+
+
+def _clear_archived_fault(order_id):
+    """오늘 아카이브에 남은 종료 주문의 fault 를 지운다. 지운 (fault, 레코드) 또는 None.
+
+    끝난 주문이라 이어갈 단계도, 되돌릴 칸·수집 상태도 없다 — 기록에서만 뺀다
+    (칸 disable · AGV 고장은 abort 가 주문 없는 고장으로 옮겨 뒀고 해제 길이 따로 있다).
+    무엇이 걸려 있었는지는 cleared_fault* 로 남긴다.
+    """
+    akey = _today_archive_key()
+    raw = r.hget(akey, order_id)
+    if not raw:
+        return None
+    try:
+        record = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"[admin] 아카이브 레코드 파싱 실패: {order_id}")
+        return None
+
+    fault = record.pop("fault", None)
+    if not fault:
+        return None
+    record["cleared_fault"] = fault
+    record["cleared_fault_section"] = record.pop("fault_section", None)
+    record["fault_cleared_at"] = datetime.now(KST).isoformat(timespec="seconds")
+    r.hset(akey, order_id, json.dumps(record, ensure_ascii=False))      # TTL 은 그대로 (HSET 은 키 만료를 건드리지 않는다)
+    return fault, record
 
 
 @bp.route("/admin/faults", methods=["GET"])
@@ -247,6 +275,9 @@ def clear_agv_fault():
 def clear_order_fault(order_id):
     """
     fault 해제 — stage 는 그대로 두고 그 자리에서 이어간다
+
+    이미 종료된 주문(오늘 아카이브)에 남은 fault 도 여기로 지운다. 이어갈 단계가 없으므로
+    기록에서만 빼고 응답에 archived=true 를 싣는다.
     ---
     tags:
       - Admin
@@ -278,11 +309,23 @@ def clear_order_fault(order_id):
         return jsonify({"error": "비밀번호가 틀렸습니다"}), 400
 
     order = r.hgetall(f"order:{order_id}")
-    if not order:
-        return jsonify({"error": "존재하지 않거나 만료된 주문입니다"}), 404
-
     fault = order.get("fault")
     if not fault:
+        # 종료된 주문 — 해시는 fault 가 지워졌거나(중단) 만료됐고, fault 는 아카이브에만 남아 있다
+        archived = _clear_archived_fault(order_id)
+        if archived:
+            fault, record = archived
+            stage = record.get("ended_at_stage") or record.get("final_status")
+            logger.info(f"[admin] {order_id} 종료 주문 fault 해제 ({fault}) — 아카이브 기록에서만 지움")
+            return jsonify({
+                "ok": True,
+                "order_id": order_id,
+                "cleared": fault,
+                "stage": stage,
+                "archived": True,
+            }), 200
+        if not order:
+            return jsonify({"error": "존재하지 않거나 만료된 주문입니다"}), 404
         return jsonify({"error": "fault 가 걸려 있지 않습니다", "stage": order.get("stage")}), 409
 
     clear_fault(order_id)
