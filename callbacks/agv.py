@@ -79,6 +79,10 @@ def _fault_target(con):
     AGV가 이미 손을 뗀 received 주문에 agv_broken 이 붙었다. 고장은 'AGV가 지금 들고 있는
     주문'에만 붙인다 — order_id → station_id → 트레이를 든 단계(AGV_HOLDING)의 주문 1건.
     order_id 가 왔어도 이미 끝나 사라진 주문이면 붙이지 않는다 (빈 해시에 fault 만 생긴다).
+    완료된 주문도 같다 — 해시는 ORDER_DONE_TTL(10분) 동안 남아 있어서, AGV 가 빈 차로 복귀하며
+    직전 주문 번호를 계속 실어 보내면 fault 가 그 해시에 붙는다. 진행 중 목록에도 아카이브에도
+    없는 주문이라 관리자 화면에 안 보이는데 agv:status 는 고장이라 배정만 막혔다
+    (실측 11/15 01:45 ord_db1ab1ca completed <- agv_broken).
     """
     order_id = con.get("order_id")
     if not order_id:
@@ -86,7 +90,13 @@ def _fault_target(con):
         if station_id:
             order_id = r.get(f"{STATION_ORDER_PREFIX}{station_id}")
     if order_id:
-        return order_id if r.exists(f"order:{order_id}") else None
+        stage = r.hget(f"order:{order_id}", "stage")
+        if not stage:
+            return None                              # 만료된 주문
+        if stage == "completed":
+            logger.warning(f"[agv] 고장 보고의 주문 {order_id} 은 이미 완료 — 주문 없는 고장으로 올린다")
+            return None
+        return order_id
 
     holding = []
     for sid in ("1", "2", "3"):
