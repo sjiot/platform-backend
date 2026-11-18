@@ -194,8 +194,12 @@ CONFIG.ADMIN_PW = String(CONFIG.ADMIN_PW);   // 숫자로 적어도 비교되도
      status  calling    → 호출 중
              assembling → 조립 중
              idle       → 슬롯 비움 (order_seq 는 null)
-     어떤 번호를 어디에 띄울지는 서버가 정한다. 화면은 응답을 그대로 그린다.
      조회 실패·형식 오류면 직전 화면 유지
+   GET {API_BASE}/dashboard/station
+     → { "success": true, "stations": { "1": { "order_seq": 12, "stage": "loaded" }, ... } }
+     /display/status 는 arrived 부터 calling 이라, AGV 가 트레이를 실은 loaded 부터
+     호출하려고 stage 를 따로 본다. loaded 인 조립대는 호출 칸에 띄우고 대기 목록에서 뺀다.
+     이 조회가 실패하면 /display/status 응답만으로 그린다
    ===================================================================== */
 
 /* 번호 비교 (숫자 38 과 문자열 "038" 도 같은 번호로 봄) */
@@ -216,6 +220,21 @@ function parseDisplay(data) {
   return { calls, waiting: data.waiting };
 }
 
+/* loaded(AGV 적재) 인 조립대를 호출 칸으로 올린다. 대기 목록에 있던 그 번호는 뺀다. */
+const CALL_FROM_STAGES = ['loaded'];
+function applyLoaded(display, stationData) {
+  const st = stationData && stationData.success && stationData.stations;
+  if (!st) return display;
+  const raised = [];
+  const calls = CONFIG.STATIONS.map((station, i) => {
+    const row = st[String(station.id)];
+    if (display.calls[i] || !row || row.order_seq == null || !CALL_FROM_STAGES.includes(row.stage)) return display.calls[i];
+    raised.push(row.order_seq);
+    return { no: row.order_seq, status: 'calling' };
+  });
+  return { calls, waiting: display.waiting.filter(n => !raised.some(r => sameSeq(r, n))) };
+}
+
 async function getJSON(path) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), CONFIG.FETCH_TIMEOUT_MS);
@@ -232,7 +251,11 @@ let failStreak = 0;                                  // 연속 실패 횟수
 let firstLoad = true;
 async function poll() {
   try {
-    const { calls, waiting } = parseDisplay(await getJSON('/display/status'));
+    const [display, stationData] = await Promise.all([
+      getJSON('/display/status'),
+      getJSON('/dashboard/station').catch(e => { console.warn('station poll failed', e); return null; }),
+    ]);
+    const { calls, waiting } = applyLoaded(parseDisplay(display), stationData);
     failStreak = 0;
     QueueBoard.setOnline(true);
     // 처음 켰을 때 이미 떠 있던 호출은 새 호출이 아니므로 차임·깜빡임 없이 표시
