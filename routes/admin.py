@@ -258,9 +258,8 @@ def clear_order_fault(order_id):
     tags:
       - Admin
     description: |
-      진행 중인 주문만 해제한다. 다음 둘은 409 로 거절한다.
-        · stage_timeout — 해제하지 않고 중단(POST /admin/order/{id}/abort)으로 끝낸다
-        · 완료된 주문(completed) — 남은 fault 는 기록이다. 이어갈 단계가 없다
+      진행 중인 주문만 해제한다. 완료된 주문(completed)은 409 — 남은 fault 는 기록이고 이어갈 단계가 없다.
+      stage_timeout 도 해제한다. fault 를 빼고 같은 단계에서 마감을 다시 걸어 cnt_process 를 올린다.
       노쇼 폐기 중(unclaimed)에 붙은 AGV 고장은 해제할 수 있다.
     parameters:
       - in: path
@@ -283,7 +282,7 @@ def clear_order_fault(order_id):
       404:
         description: 존재하지 않는 주문
       409:
-        description: fault 가 걸려 있지 않음 · stage_timeout(중단 대상) · 이미 완료된 주문
+        description: fault 가 걸려 있지 않음 · 이미 완료된 주문
     """
     data = request.get_json(silent=True) or {}
     if data.get("password") != STATION_RESET_PASSWORD:
@@ -300,11 +299,6 @@ def clear_order_fault(order_id):
     if order.get("stage") == "completed":
         return jsonify({"error": "이미 완료된 주문입니다 — fault 는 기록으로만 남습니다",
                         "fault": fault, "stage": order.get("stage")}), 409
-    # 마감을 넘긴 주문은 이어가지 않는다. 해제하면 같은 자리에서 시계만 다시 돌아 또 걸린다.
-    if fault == "stage_timeout":
-        return jsonify({"error": "stage_timeout 은 해제하지 않고 중단합니다",
-                        "fault": fault, "stage": order.get("stage"),
-                        "action": "abort"}), 409
 
     clear_fault(order_id)
     logger.info(f"[admin] {order_id} fault 해제 ({fault}) stage={order.get('stage')} 유지")
