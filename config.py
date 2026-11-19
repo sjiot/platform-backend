@@ -57,7 +57,7 @@ ORDER_COUNTER_KEY = os.getenv("ORDER_COUNTER_KEY", "order:counter")
 # 대기번호 카운터(order:counter)와 따로 둔다 — 채우기로 대기번호가 1부터 다시 매겨지면 안 된다.
 # 실물 재고라 TTL 도 없고 /admin/reset 도 안 지운다. 조회: GET /admin/paper
 PAPER_KEY = os.getenv("PAPER_KEY", "kiosk:paper")
-PAPER_MAX_COUNT = int(os.getenv("PAPER_MAX_COUNT", "900"))
+PAPER_MAX_COUNT = int(os.getenv("PAPER_MAX_COUNT", "200"))
 
 # 종료 주문 상세 · 집계 (Redis ERD 5장). 90일 보관.
 ARCHIVE_PREFIX = os.getenv("ARCHIVE_PREFIX", "orders:archive:")

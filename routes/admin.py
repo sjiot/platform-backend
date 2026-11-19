@@ -1177,7 +1177,8 @@ def admin_paper():
     tags:
       - Admin
     description: |
-      남은 용지 = PAPER_MAX_COUNT(900) - kiosk:paper.used.
+      남은 용지 = PAPER_MAX_COUNT(기본 200, env 로 변경) - kiosk:paper.used.
+      max 는 PAPER_MAX_COUNT 그대로다 — 관리자 페이지가 이 값으로 잔량 비율·부족 기준을 잡는다.
       used 는 마지막 채우기(POST /admin/paper/refill) 이후 접수된 주문 수다 (주문 1건 = 1매).
       접수에 성공한 주문만 센다 — 대기열 가득 409 · 입력 오류 400 · 접수 마감 503 은 제외, 중단·노쇼는 포함.
       0 밑으로는 내려가지 않는다. /admin/reset 은 모드와 상관없이 이 값을 건드리지 않는다.
@@ -1189,15 +1190,17 @@ def admin_paper():
           properties:
             remaining:
               type: integer
-          example: {"remaining": 873}
+            max:
+              type: integer
+          example: {"remaining": 173, "max": 200}
     """
-    return jsonify({"remaining": _paper_remaining()}), 200
+    return jsonify({"remaining": _paper_remaining(), "max": PAPER_MAX_COUNT}), 200
 
 
 @bp.route('/admin/paper/refill', methods=['POST'])
 def admin_paper_refill():
     """
-    영수증 용지 채우기 (관리자 페이지 "용지 채우기" 버튼) — 다시 900매부터 센다
+    영수증 용지 채우기 (관리자 페이지 "용지 채우기" 버튼) — 다시 PAPER_MAX_COUNT(기본 200)매부터 센다
     ---
     tags:
       - Admin
@@ -1214,9 +1217,11 @@ def admin_paper_refill():
               type: boolean
             remaining:
               type: integer
-          example: {"ok": true, "remaining": 900}
+            max:
+              type: integer
+          example: {"ok": true, "remaining": 200, "max": 200}
     """
     before = _paper_remaining()
     r.hset(PAPER_KEY, "used", 0)
     logger.info(f"[admin] 영수증 용지 채움: {before} -> {PAPER_MAX_COUNT}")
-    return jsonify({"ok": True, "remaining": _paper_remaining()}), 200
+    return jsonify({"ok": True, "remaining": _paper_remaining(), "max": PAPER_MAX_COUNT}), 200
