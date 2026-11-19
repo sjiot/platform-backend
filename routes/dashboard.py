@@ -1,10 +1,11 @@
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 
 from infra.logger import logger
 from infra.extensions import r
+from config import KST
 from services.dashboard import (today_key,
                                 get_exhibition_dates,
                                 get_completed_archive_orders,
@@ -74,6 +75,9 @@ def get_order_summary():
         - 현재 대기열에 있는 주문 건수
       - completed_today
         - 오늘 정상 완료된 주문 건수
+      - yesterday_same_time_orders
+        - 어제 0시부터 어제 같은 시각(분 단위)까지 접수된 주문 건수 (증감 비교용)
+        - 계산에 실패하면 null
     responses:
       200:
         description: 주문 현황 조회 성공
@@ -99,6 +103,11 @@ def get_order_summary():
               type: integer
               description: 오늘 정상 완료된 주문 건수
               example: 7
+            yesterday_same_time_orders:
+              type: integer
+              x-nullable: true
+              description: 어제 같은 시각까지 접수된 주문 건수 (계산 실패 시 null)
+              example: 17
       400:
         description: 주문 현황 조회 실패
     """
@@ -138,12 +147,27 @@ def get_order_summary():
             if not order.get("reason"):
                 completed_today += 1
 
+        # 어제 같은 시각까지 접수된 주문 건수 — 대시보드 '주문 건수 증감'
+        # get_order_times 와 같은 기준 (아카이브 + 진행 중, KST, 정상/비정상 종료 구분 없이 접수 기준)
+        # 실패해도 다른 값은 그대로 응답한다 → 프론트는 null 이면 '—'
+        yesterday_same_time_orders = None
+
+        try:
+            yday = datetime.now(KST) - timedelta(days=1)
+            _, y_times = get_order_times(yday.strftime("%Y%m%d"))
+            cut = yday.strftime("%H:%M")
+            yesterday_same_time_orders = sum(1 for t in y_times if t <= cut)
+
+        except Exception as e:
+            logger.error(f"[dashboard/orders/stats] 어제 같은 시각 주문 수 계산 실패: {e}")
+
         return jsonify({
             "success": True,
             "total_orders": total_orders,
             "today_orders": today_orders,
             "waiting_orders": waiting_orders,
-            "completed_today": completed_today
+            "completed_today": completed_today,
+            "yesterday_same_time_orders": yesterday_same_time_orders
         }), 200
 
     except Exception as e:
